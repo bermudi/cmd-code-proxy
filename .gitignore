@@ -1,21 +1,16 @@
-# Binaries
-bin/
+# IDE & Editors
+.idea/
+.vscode/
+*.suo
+*.ntvs*
+*.njsproj
+*.sln
+*.swp
 
-# Drafts
+# Drafts & Claude config
 .drafts/
-
-# Claude config
 .claude/
-
-# Go build cache
-go.sum
-*.exe
-*.exe~
 
 # OS files
 .DS_Store
 Thumbs.db
-
-# IDE
-.idea/
-.vscode/
