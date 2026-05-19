@@ -50,13 +50,23 @@ func ConvertMessages(openAIMsgs []api.OpenAIMessage) []api.CCMessage {
 
 		if m.Role == "assistant" && len(m.ToolCalls) > 0 {
 			contentParts := parseContent(m.Content, toolNames)
+			addedTools := map[string]bool{}
+			for _, part := range contentParts {
+				if part.Type == "tool-call" && part.ToolCallID != nil {
+					addedTools[*part.ToolCallID] = true
+				}
+			}
 			for _, tc := range m.ToolCalls {
+				if addedTools[tc.ID] {
+					continue
+				}
 				contentParts = append(contentParts, api.CCContentPart{
-					Type:  "tool_use",
-					ID:    strPtr(tc.ID),
-					Name:  strPtr(tc.Function.Name),
-					Input: parseToolInput(tc.Function.Arguments),
+					Type:       "tool-call",
+					ToolCallID: strPtr(tc.ID),
+					ToolName:   strPtr(tc.Function.Name),
+					Input:      parseToolInput(tc.Function.Arguments),
 				})
+				addedTools[tc.ID] = true
 			}
 			ccMsgs = append(ccMsgs, api.CCMessage{Role: m.Role, Content: contentParts})
 			continue
@@ -218,16 +228,18 @@ func parseContent(content interface{}, toolNames map[string]string) []api.CCCont
 				if text := contentPartToString(partMap); text != "" {
 					parts = append(parts, api.CCContentPart{Type: "text", Text: strPtr(text)})
 				}
-			case "tool_use":
+			case "tool_use", "tool-call":
 				id, _ := partMap["id"].(string)
-				name, _ := partMap["name"].(string)
-				if id != "" && name != "" {
-					toolNames[id] = name
+				if id == "" {
+					id, _ = partMap["toolCallId"].(string)
 				}
-				parts = append(parts, api.CCContentPart{Type: "tool_use", ID: strPtr(id), Name: strPtr(name), Input: partMap["input"]})
-			case "tool-call":
-				id, _ := partMap["id"].(string)
+				if id == "" {
+					id, _ = partMap["tool_use_id"].(string)
+				}
 				name, _ := partMap["name"].(string)
+				if name == "" {
+					name, _ = partMap["toolName"].(string)
+				}
 				if id != "" && name != "" {
 					toolNames[id] = name
 				}
@@ -235,7 +247,12 @@ func parseContent(content interface{}, toolNames map[string]string) []api.CCCont
 				if input == nil {
 					input = partMap["arguments"]
 				}
-				parts = append(parts, api.CCContentPart{Type: "tool-call", ID: strPtr(id), Name: strPtr(name), Input: input})
+				parts = append(parts, api.CCContentPart{
+					Type:       "tool-call",
+					ToolCallID: strPtr(id),
+					ToolName:   strPtr(name),
+					Input:      input,
+				})
 			case "tool_result", "tool-result":
 				toolID, _ := partMap["tool_use_id"].(string)
 				if toolID == "" {

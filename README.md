@@ -4,7 +4,7 @@ OpenAI-compatible proxy server for the CommandCode API. It exposes `/v1/chat/com
 
 Repository: https://github.com/dev2k6/command-code-proxy-server
 
-Version: `v1.0.7`
+Version: `v1.0.8`
 
 ## Features
 
@@ -219,7 +219,7 @@ https://api.github.com/repos/dev2k6/command-code-proxy-server/tags
 If the latest GitHub tag is newer than the current app version, the version line is displayed as:
 
 ```text
-v1.0.7 (latest: v1.x.x)
+v1.0.8 (latest: v1.x.x)
 ```
 
 ## CommandCode version header
