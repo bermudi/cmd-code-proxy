@@ -2,14 +2,22 @@ package api
 
 // CommandCode API types (internal)
 
+type CCToolOutput struct {
+	Type  string `json:"type"`
+	Value string `json:"value"`
+}
+
 type CCContentPart struct {
-	Type      string  `json:"type"`
-	Text      *string `json:"text,omitempty"`
-	ID        *string `json:"id,omitempty"`
-	Name      *string `json:"name,omitempty"`
-	Input     any     `json:"input,omitempty"`
-	ToolUseID *string `json:"tool_use_id,omitempty"`
-	Content   any     `json:"content,omitempty"`
+	Type       string        `json:"type"`
+	Text       *string       `json:"text,omitempty"`
+	ID         *string       `json:"id,omitempty"`
+	Name       *string       `json:"name,omitempty"`
+	Input      any           `json:"input,omitempty"`
+	ToolCallID *string       `json:"toolCallId,omitempty"`
+	ToolName   *string       `json:"toolName,omitempty"`
+	Output     *CCToolOutput `json:"output,omitempty"`
+	ToolUseID  *string       `json:"tool_use_id,omitempty"`
+	Content    any           `json:"content,omitempty"`
 }
 
 type CCMessage struct {

@@ -21,12 +21,28 @@ func ConvertMessages(openAIMsgs []api.OpenAIMessage) []api.CCMessage {
 		}
 
 		if m.Role == "tool" {
+			toolName := m.Name
+			if toolName == "" {
+				toolName = toolNames[m.ToolCallID]
+			}
+			if toolName == "" {
+				toolName = "unknown"
+			}
+			contentStr := contentToString(m.Content)
+			outputType := "text"
+			if strings.HasPrefix(contentStr, "Error:") {
+				outputType = "error-text"
+			}
 			ccMsgs = append(ccMsgs, api.CCMessage{
 				Role: "tool",
 				Content: []api.CCContentPart{{
-					Type:      "tool_result",
-					ToolUseID: strPtr(m.ToolCallID),
-					Content:   contentToString(m.Content),
+					Type:       "tool-result",
+					ToolCallID: strPtr(m.ToolCallID),
+					ToolName:   strPtr(toolName),
+					Output: &api.CCToolOutput{
+						Type:  outputType,
+						Value: contentStr,
+					},
 				}},
 			})
 			continue
@@ -225,7 +241,30 @@ func parseContent(content interface{}, toolNames map[string]string) []api.CCCont
 				if toolID == "" {
 					toolID, _ = partMap["toolCallId"].(string)
 				}
-				parts = append(parts, api.CCContentPart{Type: "tool_result", ToolUseID: strPtr(toolID), Content: contentPartToString(partMap["content"])})
+				toolName, _ := partMap["toolName"].(string)
+				if toolName == "" {
+					toolName = toolNames[toolID]
+				}
+				if toolName == "" {
+					toolName = "unknown"
+				}
+				contentVal := contentPartToString(partMap["content"])
+				if contentVal == "" {
+					contentVal = contentPartToString(partMap["output"])
+				}
+				outputType := "text"
+				if strings.HasPrefix(contentVal, "Error:") {
+					outputType = "error-text"
+				}
+				parts = append(parts, api.CCContentPart{
+					Type:       "tool-result",
+					ToolCallID: strPtr(toolID),
+					ToolName:   strPtr(toolName),
+					Output: &api.CCToolOutput{
+						Type:  outputType,
+						Value: contentVal,
+					},
+				})
 			}
 		}
 		return parts
