@@ -21,17 +21,12 @@ func ConvertMessages(openAIMsgs []api.OpenAIMessage) []api.CCMessage {
 		}
 
 		if m.Role == "tool" {
-			toolName := m.Name
-			if toolName == "" {
-				toolName = toolNames[m.ToolCallID]
-			}
 			ccMsgs = append(ccMsgs, api.CCMessage{
 				Role: "user",
 				Content: []api.CCContentPart{{
-					Type:       "tool-result",
-					ToolCallID: strPtr(m.ToolCallID),
-					ToolName:   strPtr(toolName),
-					Text:       strPtr(contentToString(m.Content)),
+					Type:      "tool_result",
+					ToolUseID: strPtr(m.ToolCallID),
+					Content:   contentToString(m.Content),
 				}},
 			})
 			continue
@@ -230,11 +225,7 @@ func parseContent(content interface{}, toolNames map[string]string) []api.CCCont
 				if toolID == "" {
 					toolID, _ = partMap["toolCallId"].(string)
 				}
-				toolName, _ := partMap["toolName"].(string)
-				if toolName == "" {
-					toolName = toolNames[toolID]
-				}
-				parts = append(parts, api.CCContentPart{Type: "tool-result", ToolCallID: strPtr(toolID), ToolName: strPtr(toolName), Text: strPtr(contentPartToString(partMap["content"]))})
+				parts = append(parts, api.CCContentPart{Type: "tool_result", ToolUseID: strPtr(toolID), Content: contentPartToString(partMap["content"])})
 			}
 		}
 		return parts
