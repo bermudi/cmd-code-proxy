@@ -8,8 +8,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"math/rand"
 	"net/http"
+	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/dev2k6/command-code-proxy-server/internal/api"
@@ -20,6 +23,14 @@ import (
 const defaultBaseURL = "https://api.commandcode.ai"
 const defaultTimeout = 300 * time.Second
 const debugLogLimit = 20000
+
+const (
+	maxRetries     = 3
+	baseRetryDelay = 1 * time.Second
+	maxRetryDelay  = 30 * time.Second
+)
+
+const modelsCacheTTL = 5 * time.Minute
 
 func truncateLog(s string) string {
 	if len(s) <= debugLogLimit {
@@ -49,7 +60,7 @@ func normalizeFinishReason(reason string) string {
 	switch reason {
 	case "tool_calls", "tool-calls":
 		return "tool_calls"
-	case "length", "max_tokens":
+	case "length", "max_tokens", "max_output_tokens", "max-tokens":
 		return "length"
 	case "content_filter", "content-filter":
 		return "content_filter"
@@ -60,10 +71,14 @@ func normalizeFinishReason(reason string) string {
 
 // Proxy struct
 type Proxy struct {
-	APIKey  string
-	BaseURL string
-	Client  *http.Client
-	Debug   bool
+	APIKey           string
+	BaseURL          string
+	Client           *http.Client
+	Debug            bool
+	ListClosedModels bool
+	modelsCache      []api.OpenAIModel
+	modelsCacheTime  time.Time
+	modelsCacheMu    sync.RWMutex
 }
 
 // NewProxy creates a new proxy instance
@@ -158,6 +173,161 @@ func (p *Proxy) CallUpstream(req *http.Request) (*http.Response, error) {
 	return resp, nil
 }
 
+// DoUpstream calls upstream with retry on 429/5xx
+func (p *Proxy) DoUpstream(ctx context.Context, ccBody api.CCRequestBody, apiKey string) (*http.Response, error) {
+	var lastErr error
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		if attempt > 0 {
+			delay := calculateBackoff(attempt)
+			if delay > maxRetryDelay {
+				delay = maxRetryDelay
+			}
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(delay):
+			}
+		}
+
+		ccReq, err := p.CreateUpstreamRequest(ctx, ccBody, apiKey)
+		if err != nil {
+			return nil, err
+		}
+
+		resp, err := p.Client.Do(ccReq)
+		if err != nil {
+			lastErr = err
+			p.debugf("[DEBUG] Request failed (attempt %d/%d): %v", attempt+1, maxRetries+1, err)
+			continue
+		}
+
+		if resp.StatusCode == http.StatusTooManyRequests || (resp.StatusCode >= 500 && resp.StatusCode < 600) {
+			lastErr = fmt.Errorf("upstream status %d", resp.StatusCode)
+			retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
+			body, _ := io.ReadAll(resp.Body)
+			resp.Body.Close()
+			if retryAfter > 0 {
+				p.debugf("[DEBUG] Upstream %d, Retry-After=%s, retrying (%d/%d): %s", resp.StatusCode, retryAfter, attempt+1, maxRetries+1, string(body))
+				select {
+				case <-ctx.Done():
+					return nil, ctx.Err()
+				case <-time.After(retryAfter):
+				}
+			} else {
+				p.debugf("[DEBUG] Upstream %d, retrying (%d/%d): %s", resp.StatusCode, attempt+1, maxRetries+1, string(body))
+			}
+			continue
+		}
+
+		return resp, nil
+	}
+	return nil, fmt.Errorf("max retries exceeded: %w", lastErr)
+}
+
+func parseRetryAfter(value string) time.Duration {
+	if value == "" {
+		return 0
+	}
+	if sec, err := strconv.Atoi(value); err == nil && sec > 0 {
+		return time.Duration(sec) * time.Second
+	}
+	if t, err := http.ParseTime(value); err == nil {
+		until := time.Until(t)
+		if until > 0 {
+			return until
+		}
+	}
+	return 0
+}
+
+func calculateBackoff(attempt int) time.Duration {
+	base := baseRetryDelay * time.Duration(1<<attempt)    // 1s, 2s, 4s
+	jitter := time.Duration(rand.Int63n(int64(base) / 5)) // ±20%
+	return base + jitter
+}
+
+func extractOwner(modelID string) string {
+	parts := strings.SplitN(modelID, "/", 2)
+	if len(parts) >= 2 {
+		return parts[0]
+	}
+	return "unknown"
+}
+
+func isOpenModel(m api.OpenAIModel) bool {
+	// Open-source providers use provider/model format (e.g. "deepseek/deepseek-v4-pro").
+	// Closed/premium models (Claude, GPT) use bare IDs without a slash.
+	return strings.Contains(m.ID, "/")
+}
+
+func filterModels(models []api.OpenAIModel, includeClosed bool) []api.OpenAIModel {
+	if includeClosed {
+		return models
+	}
+	openModels := make([]api.OpenAIModel, 0, len(models))
+	for _, m := range models {
+		if isOpenModel(m) {
+			openModels = append(openModels, m)
+		}
+	}
+	return openModels
+}
+
+// FetchModels fetches model list from upstream with caching
+func (p *Proxy) FetchModels(apiKey string) ([]api.OpenAIModel, error) {
+	p.modelsCacheMu.RLock()
+	if len(p.modelsCache) > 0 && time.Since(p.modelsCacheTime) < modelsCacheTTL {
+		cached := p.modelsCache
+		p.modelsCacheMu.RUnlock()
+		return cached, nil
+	}
+	p.modelsCacheMu.RUnlock()
+
+	req, err := http.NewRequest(http.MethodGet, p.BaseURL+"/provider/v1/models", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", "Bearer "+apiKey)
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := p.Client.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("upstream status %d", resp.StatusCode)
+	}
+
+	var modelList api.OpenAIModelList
+	if err := json.NewDecoder(resp.Body).Decode(&modelList); err != nil {
+		return nil, fmt.Errorf("decode models: %w", err)
+	}
+
+	models := make([]api.OpenAIModel, len(modelList.Data))
+	for i, m := range modelList.Data {
+		owner := m.OwnedBy
+		if owner == "" {
+			owner = extractOwner(m.ID)
+		}
+		models[i] = api.OpenAIModel{
+			ID:      m.ID,
+			Object:  "model",
+			Created: 0,
+			OwnedBy: owner,
+		}
+	}
+	filtered := filterModels(models, p.ListClosedModels)
+
+	p.modelsCacheMu.Lock()
+	p.modelsCache = filtered
+	p.modelsCacheTime = time.Now()
+	p.modelsCacheMu.Unlock()
+
+	return filtered, nil
+}
+
 // HandleChatCompletions handles the /v1/chat/completions endpoint
 func (p *Proxy) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -204,15 +374,8 @@ func (p *Proxy) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Create upstream request
-	ccReq, err := p.CreateUpstreamRequest(r.Context(), ccBody, apiKey)
-	if err != nil {
-		p.writeOpenAIError(w, http.StatusInternalServerError, "Failed to create upstream request", "server_error")
-		return
-	}
-
-	// Call upstream
-	ccResp, err := p.CallUpstream(ccReq)
+	// Call upstream with retry
+	ccResp, err := p.DoUpstream(r.Context(), ccBody, apiKey)
 	if err != nil {
 		p.writeOpenAIError(w, http.StatusBadGateway, err.Error(), "api_error")
 		return
@@ -223,6 +386,11 @@ func (p *Proxy) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		errBody, _ := io.ReadAll(ccResp.Body)
 		message := fmt.Sprintf("Upstream error: %s", string(errBody))
 		log.Printf("[ERROR] Upstream returned %d: %s", ccResp.StatusCode, string(errBody))
+		// Log request body on 4xx for debugging
+		if ccResp.StatusCode >= http.StatusBadRequest && ccResp.StatusCode < http.StatusInternalServerError {
+			reqJSON, _ := json.Marshal(ccBody)
+			log.Printf("[ERROR] Request body that caused %d: %s", ccResp.StatusCode, truncateLog(string(reqJSON)))
+		}
 		status := http.StatusBadGateway
 		if ccResp.StatusCode >= http.StatusBadRequest && ccResp.StatusCode < http.StatusInternalServerError {
 			status = ccResp.StatusCode
@@ -292,6 +460,29 @@ func (p *Proxy) StreamResponse(w http.ResponseWriter, r *http.Request, ccResp *h
 				Model:   model,
 				Choices: []api.OpenAIChoice{{Index: 0, Delta: &delta}},
 			})
+
+		case "reasoning-start":
+			// State change: entering reasoning mode. No output needed.
+
+		case "reasoning-delta":
+			delta := api.OpenAIDelta{Content: event.Text}
+			if !sentRole {
+				delta.Role = "assistant"
+				sentRole = true
+			}
+			p.WriteSSE(w, flusher, api.OpenAIChatResponse{
+				ID:      requestID,
+				Object:  "chat.completion.chunk",
+				Created: created,
+				Model:   model,
+				Choices: []api.OpenAIChoice{{Index: 0, Delta: &delta}},
+			})
+
+		case "reasoning-end":
+			// State change: exiting reasoning mode. No output needed.
+
+		case "tool-result":
+			// Tool result events in stream are informational; no action needed.
 
 		case "tool-use":
 			toolCalls := []api.OpenAIDeltaToolCall{{
@@ -443,7 +634,7 @@ func (p *Proxy) NonStreamResponse(w http.ResponseWriter, ccResp *http.Response, 
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 
 	var content strings.Builder
-	var inputTokens, outputTokens int
+	var inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens int
 	var hasToolCalls bool
 	var toolCalls []api.ToolCall
 	toolCallByID := map[string]int{}
@@ -464,6 +655,12 @@ func (p *Proxy) NonStreamResponse(w http.ResponseWriter, ccResp *http.Response, 
 		switch event.Type {
 		case "text-delta":
 			content.WriteString(event.Text)
+		case "reasoning-start":
+			// no-op
+		case "reasoning-delta":
+			content.WriteString(event.Text)
+		case "reasoning-end":
+			// no-op
 		case "tool-use":
 			hasToolCalls = true
 			toolCallByID[event.ToolCallID] = len(toolCalls)
@@ -522,10 +719,14 @@ func (p *Proxy) NonStreamResponse(w http.ResponseWriter, ccResp *http.Response, 
 					},
 				})
 			}
+		case "tool-result":
+			// Tool result events in stream are informational; no action needed
 		case "finish":
 			if event.TotalUsage != nil {
 				inputTokens = event.TotalUsage.InputTokens
 				outputTokens = event.TotalUsage.OutputTokens
+				cacheReadTokens = event.TotalUsage.CacheReadInputTokens
+				cacheWriteTokens = event.TotalUsage.CacheCreationInputTokens
 			}
 		case "error":
 			log.Printf("[ERROR] Stream error: %v", event.Error)
@@ -543,6 +744,18 @@ func (p *Proxy) NonStreamResponse(w http.ResponseWriter, ccResp *http.Response, 
 		finishReason = "tool_calls"
 	}
 
+	usage := &api.OpenAIUsage{
+		PromptTokens:     inputTokens,
+		CompletionTokens: outputTokens,
+		TotalTokens:      inputTokens + outputTokens,
+	}
+	if cacheReadTokens > 0 {
+		usage.CacheReadTokens = cacheReadTokens
+	}
+	if cacheWriteTokens > 0 {
+		usage.CacheWriteTokens = cacheWriteTokens
+	}
+
 	response := api.OpenAIChatResponse{
 		ID:      requestID,
 		Object:  "chat.completion",
@@ -553,11 +766,7 @@ func (p *Proxy) NonStreamResponse(w http.ResponseWriter, ccResp *http.Response, 
 			Message:      msg,
 			FinishReason: &finishReason,
 		}},
-		Usage: &api.OpenAIUsage{
-			PromptTokens:     inputTokens,
-			CompletionTokens: outputTokens,
-			TotalTokens:      inputTokens + outputTokens,
-		},
+		Usage: usage,
 	}
 
 	w.Header().Set("Content-Type", "application/json")
@@ -666,40 +875,53 @@ func responseItemsToMessages(items []any) []api.OpenAIMessage {
 	return messages
 }
 
+// fallbackModels is used when dynamic fetch fails
+var fallbackModels = []api.OpenAIModel{
+	{ID: "moonshotai/Kimi-K2.6", Object: "model", Created: 0, OwnedBy: "moonshotai"},
+	{ID: "moonshotai/Kimi-K2.5", Object: "model", Created: 0, OwnedBy: "moonshotai"},
+	{ID: "zai-org/GLM-5.1", Object: "model", Created: 0, OwnedBy: "zhipuai"},
+	{ID: "zai-org/GLM-5", Object: "model", Created: 0, OwnedBy: "zhipuai"},
+	{ID: "MiniMaxAI/MiniMax-M2.7", Object: "model", Created: 0, OwnedBy: "minimaxai"},
+	{ID: "MiniMaxAI/MiniMax-M2.5", Object: "model", Created: 0, OwnedBy: "minimaxai"},
+	{ID: "MiniMaxAI/MiniMax-M3", Object: "model", Created: 0, OwnedBy: "minimaxai"},
+	{ID: "deepseek/deepseek-v4-pro", Object: "model", Created: 0, OwnedBy: "deepseek"},
+	{ID: "deepseek/deepseek-v4-flash", Object: "model", Created: 0, OwnedBy: "deepseek"},
+	{ID: "Qwen/Qwen3.6-Max-Preview", Object: "model", Created: 0, OwnedBy: "qwen"},
+	{ID: "Qwen/Qwen3.6-Plus", Object: "model", Created: 0, OwnedBy: "qwen"},
+	{ID: "stepfun/Step-3.5-Flash", Object: "model", Created: 0, OwnedBy: "stepfun"},
+	{ID: "stepfun/Step-3.7-Flash", Object: "model", Created: 0, OwnedBy: "stepfun"},
+	{ID: "Qwen/Qwen3.7-Max-Free", Object: "model", Created: 0, OwnedBy: "qwen"},
+	{ID: "Qwen/Qwen3.7-Max", Object: "model", Created: 0, OwnedBy: "qwen"},
+	{ID: "xiaomi/mimo-v2.5-pro", Object: "model", Created: 0, OwnedBy: "xiaomi"},
+	{ID: "xiaomi/mimo-v2.5", Object: "model", Created: 0, OwnedBy: "xiaomi"},
+	{ID: "google/gemini-3.1-flash-lite", Object: "model", Created: 0, OwnedBy: "google"},
+}
+
 // HandleModels handles the /v1/models endpoint
 func (p *Proxy) HandleModels(w http.ResponseWriter, r *http.Request) {
-	models := api.OpenAIModelList{
-		Object: "list",
-		Data: []api.OpenAIModel{
-			// MoonshotAI
-			{ID: "moonshotai/Kimi-K2.6", Object: "model", Created: 0, OwnedBy: "moonshotai"},
-			{ID: "moonshotai/Kimi-K2.5", Object: "model", Created: 0, OwnedBy: "moonshotai"},
-			// ZhipuAI
-			{ID: "zai-org/GLM-5.1", Object: "model", Created: 0, OwnedBy: "zhipuai"},
-			{ID: "zai-org/GLM-5", Object: "model", Created: 0, OwnedBy: "zhipuai"},
-			// MiniMaxAI
-			{ID: "MiniMaxAI/MiniMax-M2.7", Object: "model", Created: 0, OwnedBy: "minimaxai"},
-			{ID: "MiniMaxAI/MiniMax-M2.5", Object: "model", Created: 0, OwnedBy: "minimaxai"},
-			{ID: "MiniMaxAI/MiniMax-M3", Object: "model", Created: 0, OwnedBy: "minimaxai"},
-			// DeepSeek
-			{ID: "deepseek/deepseek-v4-pro", Object: "model", Created: 0, OwnedBy: "deepseek"},
-			{ID: "deepseek/deepseek-v4-flash", Object: "model", Created: 0, OwnedBy: "deepseek"},
-			// Qwen
-			{ID: "Qwen/Qwen3.6-Max-Preview", Object: "model", Created: 0, OwnedBy: "qwen"},
-			{ID: "Qwen/Qwen3.6-Plus", Object: "model", Created: 0, OwnedBy: "qwen"},
-			// StepFun
-			{ID: "stepfun/Step-3.5-Flash", Object: "model", Created: 0, OwnedBy: "stepfun"},
-			{ID: "stepfun/Step-3.7-Flash", Object: "model", Created: 0, OwnedBy: "stepfun"},
-			// Qwen (3.7 line)
-			{ID: "Qwen/Qwen3.7-Max-Free", Object: "model", Created: 0, OwnedBy: "qwen"},
-			{ID: "Qwen/Qwen3.7-Max", Object: "model", Created: 0, OwnedBy: "qwen"},
-			// Xiaomi MiMo
-			{ID: "xiaomi/mimo-v2.5-pro", Object: "model", Created: 0, OwnedBy: "xiaomi"},
-			{ID: "xiaomi/mimo-v2.5", Object: "model", Created: 0, OwnedBy: "xiaomi"},
-			// Google
-			{ID: "google/gemini-3.1-flash-lite", Object: "model", Created: 0, OwnedBy: "google"},
-		},
+	apiKey := r.Header.Get("Authorization")
+	if apiKey != "" {
+		apiKey = strings.TrimPrefix(apiKey, "Bearer ")
+		apiKey = strings.TrimSpace(apiKey)
+	} else if p.APIKey != "" {
+		apiKey = p.APIKey
 	}
+
+	var models []api.OpenAIModel
+	if apiKey != "" {
+		var err error
+		models, err = p.FetchModels(apiKey)
+		if err != nil {
+			p.debugf("[DEBUG] Failed to fetch models dynamically: %v. Using fallback.", err)
+		}
+	}
+	if models == nil {
+		models = filterModels(fallbackModels, p.ListClosedModels)
+	}
+
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(models)
+	json.NewEncoder(w).Encode(api.OpenAIModelList{
+		Object: "list",
+		Data:   models,
+	})
 }

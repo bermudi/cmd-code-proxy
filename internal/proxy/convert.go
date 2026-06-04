@@ -33,6 +33,11 @@ func ConvertMessages(openAIMsgs []api.OpenAIMessage) []api.CCMessage {
 			if strings.HasPrefix(contentStr, "Error:") {
 				outputType = "error-text"
 			}
+			// toolCallId is required for tool-result messages.
+			if m.ToolCallID == "" {
+				// Skip tool messages without a toolCallId — they can't be matched.
+				continue
+			}
 			ccMsgs = append(ccMsgs, api.CCMessage{
 				Role: "tool",
 				Content: []api.CCContentPart{{
@@ -60,6 +65,9 @@ func ConvertMessages(openAIMsgs []api.OpenAIMessage) []api.CCMessage {
 				if addedTools[tc.ID] {
 					continue
 				}
+				if tc.ID == "" || tc.Function.Name == "" {
+					continue
+				}
 				contentParts = append(contentParts, api.CCContentPart{
 					Type:       "tool-call",
 					ToolCallID: strPtr(tc.ID),
@@ -68,11 +76,11 @@ func ConvertMessages(openAIMsgs []api.OpenAIMessage) []api.CCMessage {
 				})
 				addedTools[tc.ID] = true
 			}
-			ccMsgs = append(ccMsgs, api.CCMessage{Role: m.Role, Content: contentParts})
+			ccMsgs = append(ccMsgs, api.CCMessage{Role: normalizeRole(m.Role), Content: contentParts})
 			continue
 		}
 
-		ccMsgs = append(ccMsgs, api.CCMessage{Role: m.Role, Content: parseContent(m.Content, toolNames)})
+		ccMsgs = append(ccMsgs, api.CCMessage{Role: normalizeRole(m.Role), Content: parseContent(m.Content, toolNames)})
 	}
 	return ccMsgs
 }
@@ -131,6 +139,24 @@ func parseToolInput(arguments string) any {
 	return input
 }
 
+// parseToolInputJSON handles raw JSON arguments that may already be parsed (map/string/any).
+func parseToolInputJSON(input any) any {
+	if input == nil {
+		return map[string]any{}
+	}
+	if _, ok := input.(map[string]any); ok {
+		return input
+	}
+	if s, ok := input.(string); ok && s != "" {
+		var parsed any
+		if err := json.Unmarshal([]byte(s), &parsed); err == nil {
+			return parsed
+		}
+		return map[string]any{"arguments": s}
+	}
+	return input
+}
+
 func strPtr(s string) *string {
 	if s == "" {
 		return nil
@@ -179,7 +205,7 @@ func contentPartToString(content any) string {
 		}
 		return b.String()
 	case map[string]any:
-		for _, key := range []string{"text", "content", "output_text", "input_text", "refusal", "thinking", "redacted_thinking"} {
+		for _, key := range []string{"text", "content", "output_text", "input_text", "refusal", "thinking", "redacted_thinking", "reasoning"} {
 			if text, ok := v[key].(string); ok {
 				return text
 			}
@@ -220,15 +246,19 @@ func parseContent(content interface{}, toolNames map[string]string) []api.CCCont
 			}
 			typ, _ := partMap["type"].(string)
 			switch typ {
-			case "text", "input_text", "output_text", "refusal", "thinking", "redacted_thinking", "reasoning", "document", "search_result":
+			case "text", "input_text", "output_text", "refusal", "document", "search_result":
 				if text := contentPartToString(partMap); text != "" {
 					parts = append(parts, api.CCContentPart{Type: "text", Text: strPtr(text)})
+				}
+			case "thinking", "redacted_thinking", "reasoning":
+				if text := contentPartToString(partMap); text != "" {
+					parts = append(parts, api.CCContentPart{Type: "reasoning", Text: strPtr(text)})
 				}
 			case "image_url", "input_image", "image":
 				if text := contentPartToString(partMap); text != "" {
 					parts = append(parts, api.CCContentPart{Type: "text", Text: strPtr(text)})
 				}
-			case "tool_use", "tool-call":
+			case "tool_use", "tool-call", "tool_call", "toolCall":
 				id, _ := partMap["id"].(string)
 				if id == "" {
 					id, _ = partMap["toolCallId"].(string)
@@ -236,27 +266,51 @@ func parseContent(content interface{}, toolNames map[string]string) []api.CCCont
 				if id == "" {
 					id, _ = partMap["tool_use_id"].(string)
 				}
+				if id == "" {
+					id, _ = partMap["tool_call_id"].(string)
+				}
 				name, _ := partMap["name"].(string)
 				if name == "" {
 					name, _ = partMap["toolName"].(string)
 				}
-				if id != "" && name != "" {
+				if name == "" {
+					if fn, ok := partMap["function"].(map[string]any); ok {
+						name, _ = fn["name"].(string)
+					}
+				}
+				if id != "" && name != "" && toolNames != nil {
 					toolNames[id] = name
+				}
+				// Only emit tool-call content part if both id and name are present.
+				// Missing fields cause upstream validation errors (400).
+				if id == "" || name == "" {
+					continue
 				}
 				input := partMap["input"]
 				if input == nil {
 					input = partMap["arguments"]
 				}
+				if input == nil {
+					if fn, ok := partMap["function"].(map[string]any); ok {
+						input = fn["arguments"]
+					}
+				}
 				parts = append(parts, api.CCContentPart{
 					Type:       "tool-call",
 					ToolCallID: strPtr(id),
 					ToolName:   strPtr(name),
-					Input:      input,
+					Input:      parseToolInputJSON(input),
 				})
-			case "tool_result", "tool-result":
+			case "tool_result", "tool-result", "toolResult":
 				toolID, _ := partMap["tool_use_id"].(string)
 				if toolID == "" {
 					toolID, _ = partMap["toolCallId"].(string)
+				}
+				if toolID == "" {
+					toolID, _ = partMap["id"].(string)
+				}
+				if toolID == "" {
+					toolID, _ = partMap["tool_call_id"].(string)
 				}
 				toolName, _ := partMap["toolName"].(string)
 				if toolName == "" {
@@ -272,6 +326,10 @@ func parseContent(content interface{}, toolNames map[string]string) []api.CCCont
 				outputType := "text"
 				if strings.HasPrefix(contentVal, "Error:") {
 					outputType = "error-text"
+				}
+				// toolCallId is required for tool-result; skip if missing.
+				if toolID == "" {
+					continue
 				}
 				parts = append(parts, api.CCContentPart{
 					Type:       "tool-result",
@@ -291,11 +349,12 @@ func parseContent(content interface{}, toolNames map[string]string) []api.CCCont
 }
 
 // Extract system message and remaining messages
+// Also extracts "developer" role (OpenAI's replacement for "system" in newer APIs).
 func ExtractSystem(msgs []api.OpenAIMessage) (string, []api.OpenAIMessage) {
 	var system strings.Builder
 	var rest []api.OpenAIMessage
 	for _, m := range msgs {
-		if m.Role == "system" {
+		if m.Role == "system" || m.Role == "developer" {
 			if system.Len() > 0 {
 				system.WriteString("\n")
 			}
@@ -305,4 +364,19 @@ func ExtractSystem(msgs []api.OpenAIMessage) (string, []api.OpenAIMessage) {
 		}
 	}
 	return system.String(), rest
+}
+
+// normalizeRole maps OpenAI role names to CommandCode-valid roles.
+// CC accepts: "user" | "assistant" | "tool"
+func normalizeRole(role string) string {
+	switch role {
+	case "user", "assistant", "tool":
+		return role
+	case "developer", "system":
+		// These are extracted by ExtractSystem before ConvertMessages runs,
+		// but guard against them leaking through.
+		return "user"
+	default:
+		return "user"
+	}
 }

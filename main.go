@@ -17,6 +17,7 @@ func main() {
 	port := flag.String("port", "", "Port to run the server on (default: 55990)")
 	host := flag.String("host", "", "Host to bind to (default: 127.0.0.1)")
 	apiKey := flag.String("api-key", "", "API key for CommandCode (optional, can also be set via Authorization header)")
+	listClosed := flag.Bool("list-closed-models", false, "Include closed/premium models (Claude, GPT) in /v1/models")
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
 
@@ -27,6 +28,7 @@ func main() {
 
 	proxy := proxy.NewProxy(*apiKey)
 	proxy.Debug = debugLogging
+	proxy.ListClosedModels = *listClosed
 
 	srv := server.NewServer(proxy)
 	srv.SetPort(*port)

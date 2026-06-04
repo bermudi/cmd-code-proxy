@@ -1,6 +1,12 @@
 package proxy
 
-import "testing"
+import (
+	"net/http"
+	"testing"
+	"time"
+
+	"github.com/dev2k6/command-code-proxy-server/internal/api"
+)
 
 func TestMapModel(t *testing.T) {
 	cases := []struct {
@@ -56,5 +62,64 @@ func TestMapModel(t *testing.T) {
 		if got != c.want {
 			t.Errorf("MapModel(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+func TestParseRetryAfter(t *testing.T) {
+	cases := []struct {
+		input string
+		want  time.Duration
+	}{
+		{"", 0},
+		{"3", 3 * time.Second},
+		{"60", 60 * time.Second},
+		{"invalid", 0},
+		{"-1", 0},
+	}
+	for _, c := range cases {
+		got := parseRetryAfter(c.input)
+		if got != c.want {
+			t.Errorf("parseRetryAfter(%q) = %v, want %v", c.input, got, c.want)
+		}
+	}
+}
+
+func TestParseRetryAfter_HTTPDate(t *testing.T) {
+	// Parse a future HTTP date
+	future := time.Now().UTC().Add(10 * time.Second)
+	got := parseRetryAfter(future.Format(http.TimeFormat))
+	if got <= 0 || got > 11*time.Second {
+		t.Errorf("parseRetryAfter(http-date) = %v, expected ~10s", got)
+	}
+	// Parse a past HTTP date
+	past := time.Now().UTC().Add(-10 * time.Second)
+	got2 := parseRetryAfter(past.Format(http.TimeFormat))
+	if got2 != 0 {
+		t.Errorf("parseRetryAfter(past http-date) = %v, want 0", got2)
+	}
+}
+
+func TestFilterModels(t *testing.T) {
+	models := []api.OpenAIModel{
+		{ID: "deepseek/deepseek-v4-pro", OwnedBy: "command-code"}, // open (has /)
+		{ID: "claude-sonnet-4-6", OwnedBy: "command-code"},        // closed (no /)
+		{ID: "Qwen/Qwen3.7-Max", OwnedBy: "command-code"},         // open (has /)
+		{ID: "gpt-5.5", OwnedBy: "command-code"},                  // closed (no /)
+	}
+
+	openOnly := filterModels(models, false)
+	if len(openOnly) != 2 {
+		t.Fatalf("expected 2 open models, got %d", len(openOnly))
+	}
+	if openOnly[0].ID != "deepseek/deepseek-v4-pro" {
+		t.Errorf("open[0].ID = %q, want deepseek/deepseek-v4-pro", openOnly[0].ID)
+	}
+	if openOnly[1].ID != "Qwen/Qwen3.7-Max" {
+		t.Errorf("open[1].ID = %q, want Qwen/Qwen3.7-Max", openOnly[1].ID)
+	}
+
+	all := filterModels(models, true)
+	if len(all) != 4 {
+		t.Fatalf("expected 4 models when includeClosed=true, got %d", len(all))
 	}
 }
