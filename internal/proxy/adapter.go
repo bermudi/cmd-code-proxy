@@ -30,9 +30,10 @@ const modelsCacheTTL = 5 * time.Minute
 
 // ccAdapter implements Upstream by calling the real CommandCode API.
 type ccAdapter struct {
-	client  *http.Client
-	baseURL string
-	debug   bool
+	client          *http.Client
+	baseURL         string
+	debug           bool
+	versionProvider version.Provider
 
 	modelsCache     []api.OpenAIModel
 	modelsCacheTime time.Time
@@ -42,8 +43,9 @@ type ccAdapter struct {
 // NewCCAdapter creates a real upstream adapter.
 func NewCCAdapter() *ccAdapter {
 	return &ccAdapter{
-		baseURL: defaultBaseURL,
-		client:  &http.Client{Timeout: defaultTimeout},
+		baseURL:         defaultBaseURL,
+		client:          &http.Client{Timeout: defaultTimeout},
+		versionProvider: version.NewNPMProvider(),
 	}
 }
 
@@ -186,7 +188,7 @@ func (a *ccAdapter) createUpstreamRequest(ctx context.Context, ccBody api.CCRequ
 
 	ccReq.Header.Set("Content-Type", "application/json")
 	ccReq.Header.Set("Authorization", "Bearer "+apiKey)
-	ccReq.Header.Set("x-command-code-version", version.GetCommandCodeVersion())
+	ccReq.Header.Set("x-command-code-version", a.versionProvider.Get())
 	ccReq.Header.Set("x-cli-environment", "production")
 	ccReq.Header.Set("x-project-slug", projectSlugFromPath(ccBody.Config.WorkingDir))
 	ccReq.Header.Set("x-taste-learning", "true")

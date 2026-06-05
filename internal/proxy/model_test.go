@@ -200,7 +200,7 @@ func TestCreateUpstreamRequest_SetsCLIHeaders(t *testing.T) {
 		t.Fatalf("BuildRequest() error = %v", err)
 	}
 
-	a := &ccAdapter{baseURL: "https://example.test"}
+	a := &ccAdapter{baseURL: "https://example.test", versionProvider: stubProvider}
 	req, err := a.createUpstreamRequest(context.Background(), body, "test-key")
 	if err != nil {
 		t.Fatalf("CreateUpstreamRequest() error = %v", err)

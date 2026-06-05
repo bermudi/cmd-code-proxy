@@ -9,84 +9,96 @@ import (
 	"time"
 )
 
-// VersionInfo holds the version information from npm registry
-type VersionInfo struct {
-	Version     string
-	LastUpdated time.Time
+// Provider returns the current CommandCode CLI version string.
+type Provider interface {
+	Get() string
 }
 
-var (
-	versionInfo *VersionInfo
-	versionMu   sync.RWMutex
-)
+// NPMProvider fetches the latest version from the npm registry with caching.
+type NPMProvider struct {
+	mu       sync.RWMutex
+	cached   string
+	valid    bool
+	cachedAt time.Time
+	cacheTTL time.Duration
+	client   *http.Client
+}
 
-const versionCacheDuration = 30 * time.Minute
-
-// GetCommandCodeVersion fetches the latest version from npm registry
-// It caches the result for 30 minutes to avoid excessive API calls
-func GetCommandCodeVersion() string {
-	versionMu.RLock()
-	info := versionInfo
-	versionMu.RUnlock()
-
-	// Return cached version if still valid
-	if info != nil && time.Since(info.LastUpdated) < versionCacheDuration {
-		return info.Version
+// NewNPMProvider returns a Provider that polls the npm registry.
+func NewNPMProvider() *NPMProvider {
+	return &NPMProvider{
+		cacheTTL: 30 * time.Minute,
+		client:   &http.Client{Timeout: 10 * time.Second},
 	}
+}
 
-	// Fetch new version
-	newInfo, err := fetchVersionFromNPM()
+// NewNPMProviderWithClient returns a Provider using the given HTTP client (for tests).
+func NewNPMProviderWithClient(client *http.Client) *NPMProvider {
+	p := NewNPMProvider()
+	p.client = client
+	return p
+}
+
+// Get returns the latest version, using the cache when valid.
+func (p *NPMProvider) Get() string {
+	p.mu.RLock()
+	if p.valid && time.Since(p.cachedAt) < p.cacheTTL {
+		v := p.cached
+		p.mu.RUnlock()
+		return v
+	}
+	p.mu.RUnlock()
+
+	v, err := p.fetch()
 	if err != nil {
-		// Return cached version on error, or default
-		versionMu.RLock()
-		defer versionMu.RUnlock()
-		if versionInfo != nil {
-			return versionInfo.Version
+		// Return stale cache on error, or unknown
+		p.mu.RLock()
+		if p.valid {
+			v = p.cached
+			p.mu.RUnlock()
+			return v
 		}
+		p.mu.RUnlock()
 		return "unknown"
 	}
 
-	// Update cache
-	versionMu.Lock()
-	versionInfo = newInfo
-	versionMu.Unlock()
+	p.mu.Lock()
+	p.cached = v
+	p.valid = true
+	p.cachedAt = time.Now()
+	p.mu.Unlock()
 
-	return newInfo.Version
+	return v
 }
 
-// fetchVersionFromNPM fetches the latest version from npm registry
-func fetchVersionFromNPM() (*VersionInfo, error) {
-	resp, err := http.Get("https://registry.npmjs.org/command-code/latest")
+func (p *NPMProvider) fetch() (string, error) {
+	resp, err := p.client.Get("https://registry.npmjs.org/command-code/latest")
 	if err != nil {
-		return nil, fmt.Errorf("failed to fetch version: %w", err)
+		return "", fmt.Errorf("failed to fetch version: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		body, _ := io.ReadAll(resp.Body)
-		return nil, fmt.Errorf("npm registry returned %d: %s", resp.StatusCode, string(body))
+		return "", fmt.Errorf("npm registry returned %d: %s", resp.StatusCode, string(body))
 	}
 
 	var result map[string]any
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return nil, fmt.Errorf("failed to parse version: %w", err)
+		return "", fmt.Errorf("failed to parse version: %w", err)
 	}
 
-	version, ok := result["version"].(string)
+	v, ok := result["version"].(string)
 	if !ok {
-		return nil, fmt.Errorf("version field not found or invalid")
+		return "", fmt.Errorf("version field not found or invalid")
 	}
-
-	return &VersionInfo{
-		Version:     version,
-		LastUpdated: time.Now(),
-	}, nil
+	return v, nil
 }
 
-// init fetches the version on startup (in background)
-func init() {
-	go func() {
-		// Initial fetch - ignore error, will retry on first use
-		_, _ = fetchVersionFromNPM()
-	}()
+// StaticProvider returns a fixed version string. For tests.
+type StaticProvider struct {
+	Version string
 }
+
+// Get returns the fixed version.
+func (s *StaticProvider) Get() string { return s.Version }

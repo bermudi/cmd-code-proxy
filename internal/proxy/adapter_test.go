@@ -11,7 +11,11 @@ import (
 	"time"
 
 	"github.com/bermudi/cmd-code-proxy/internal/api"
+	"github.com/bermudi/cmd-code-proxy/internal/version"
 )
+
+// stubProvider returns "test" — used in adapter tests that don't test version behavior.
+var stubProvider = &version.StaticProvider{Version: "test"}
 
 func TestCCAdapter_Generate_Success(t *testing.T) {
 	ndjson := `{"type":"text-delta","text":"hello"}
@@ -36,8 +40,9 @@ func TestCCAdapter_Generate_Success(t *testing.T) {
 	defer srv.Close()
 
 	a := &ccAdapter{
-		client:  &http.Client{Timeout: 10 * time.Second},
-		baseURL: srv.URL,
+		client:          &http.Client{Timeout: 10 * time.Second},
+		baseURL:         srv.URL,
+		versionProvider: stubProvider,
 	}
 
 	body, err := a.Generate(context.Background(), api.CCRequestBody{}, "test-key")
@@ -68,8 +73,9 @@ func TestCCAdapter_Generate_RetriesOn429(t *testing.T) {
 	defer srv.Close()
 
 	a := &ccAdapter{
-		client:  &http.Client{Timeout: 10 * time.Second},
-		baseURL: srv.URL,
+		client:          &http.Client{Timeout: 10 * time.Second},
+		baseURL:         srv.URL,
+		versionProvider: stubProvider,
 	}
 
 	body, err := a.Generate(context.Background(), api.CCRequestBody{}, "key")
@@ -98,8 +104,9 @@ func TestCCAdapter_Generate_RetriesOn5xx(t *testing.T) {
 	defer srv.Close()
 
 	a := &ccAdapter{
-		client:  &http.Client{Timeout: 10 * time.Second},
-		baseURL: srv.URL,
+		client:          &http.Client{Timeout: 10 * time.Second},
+		baseURL:         srv.URL,
+		versionProvider: stubProvider,
 	}
 
 	body, err := a.Generate(context.Background(), api.CCRequestBody{}, "key")
@@ -121,8 +128,9 @@ func TestCCAdapter_Generate_ExceedsMaxRetries(t *testing.T) {
 	defer srv.Close()
 
 	a := &ccAdapter{
-		client:  &http.Client{Timeout: 10 * time.Second},
-		baseURL: srv.URL,
+		client:          &http.Client{Timeout: 10 * time.Second},
+		baseURL:         srv.URL,
+		versionProvider: stubProvider,
 	}
 
 	_, err := a.Generate(context.Background(), api.CCRequestBody{}, "key")
@@ -139,8 +147,9 @@ func TestCCAdapter_Generate_UpstreamErrorOn4xx(t *testing.T) {
 	defer srv.Close()
 
 	a := &ccAdapter{
-		client:  &http.Client{Timeout: 10 * time.Second},
-		baseURL: srv.URL,
+		client:          &http.Client{Timeout: 10 * time.Second},
+		baseURL:         srv.URL,
+		versionProvider: stubProvider,
 	}
 
 	_, err := a.Generate(context.Background(), api.CCRequestBody{}, "key")
@@ -167,8 +176,9 @@ func TestCCAdapter_Generate_ContextCancellation(t *testing.T) {
 	defer srv.Close()
 
 	a := &ccAdapter{
-		client:  &http.Client{Timeout: 10 * time.Second},
-		baseURL: srv.URL,
+		client:          &http.Client{Timeout: 10 * time.Second},
+		baseURL:         srv.URL,
+		versionProvider: stubProvider,
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
@@ -195,8 +205,9 @@ func TestCCAdapter_FetchModels_CachesResult(t *testing.T) {
 	defer srv.Close()
 
 	a := &ccAdapter{
-		client:  &http.Client{Timeout: 10 * time.Second},
-		baseURL: srv.URL,
+		client:          &http.Client{Timeout: 10 * time.Second},
+		baseURL:         srv.URL,
+		versionProvider: stubProvider,
 	}
 
 	models1, err := a.FetchModels(context.Background(), "key")
@@ -227,8 +238,9 @@ func TestCCAdapter_FetchModels_UpstreamError(t *testing.T) {
 	defer srv.Close()
 
 	a := &ccAdapter{
-		client:  &http.Client{Timeout: 10 * time.Second},
-		baseURL: srv.URL,
+		client:          &http.Client{Timeout: 10 * time.Second},
+		baseURL:         srv.URL,
+		versionProvider: stubProvider,
 	}
 
 	_, err := a.FetchModels(context.Background(), "key")
@@ -245,6 +257,9 @@ func TestNewCCAdapter(t *testing.T) {
 	if a.client == nil {
 		t.Error("client is nil")
 	}
+	if a.versionProvider == nil {
+		t.Error("versionProvider is nil")
+	}
 }
 
 func TestUpstreamError_Error(t *testing.T) {
@@ -252,5 +267,33 @@ func TestUpstreamError_Error(t *testing.T) {
 	want := "upstream status 429: rate limited"
 	if ue.Error() != want {
 		t.Errorf("Error() = %q, want %q", ue.Error(), want)
+	}
+}
+
+func TestCCAdapter_VersionHeader_Injected(t *testing.T) {
+	const wantVersion = "1.2.3-test"
+
+	var gotVersion string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotVersion = r.Header.Get("x-command-code-version")
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`{"type":"finish","finishReason":"stop"}`))
+	}))
+	defer srv.Close()
+
+	a := &ccAdapter{
+		client:          &http.Client{Timeout: 10 * time.Second},
+		baseURL:         srv.URL,
+		versionProvider: &version.StaticProvider{Version: wantVersion},
+	}
+
+	body, err := a.Generate(context.Background(), api.CCRequestBody{}, "key")
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	body.Close()
+
+	if gotVersion != wantVersion {
+		t.Errorf("x-command-code-version = %q, want %q", gotVersion, wantVersion)
 	}
 }
