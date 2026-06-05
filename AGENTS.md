@@ -33,12 +33,18 @@ go test ./...
 
 # start
 ./bin/command-code-proxy -api-key "$(cat ~/.pi/agent/CMD_API_KEY)"
-# flags: -port (default 55990), -host (default 127.0.0.1), -api-key, -version
+# flags: -port (default 55990), -host (default 127.0.0.1), -api-key, -list-closed-models, -version
 
 # verify
 curl http://127.0.0.1:55990/health
 curl http://127.0.0.1:55990/v1/models
 ```
+
+## Morning handoff notes
+- Before release, rebuild all tracked binaries together (`bin/command-code-proxy`, `bin/command-code-proxy-arm64`, `bin/command-code-proxy.exe`) or intentionally drop binary changes from the commit. Current drift is easy to miss.
+- If cutting a release, bump `appVersion` in `main.go`, update README's version string, tag the commit, and make sure the binaries are built from the clean tagged tree.
+- Decide whether process cwd is acceptable for `config.workingDir`/`x-project-slug`. If users run this as a service, add a `-working-dir` flag or another explicit override instead of silently using the service directory.
+- After those fixes, run `go test ./...`, `go vet ./...`, and smoke `/health` plus `/v1/models` against the built binary.
 
 ## Constraints
 - Default binds to localhost only — do not expose to network without auth

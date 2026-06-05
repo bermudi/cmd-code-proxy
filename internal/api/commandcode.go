@@ -49,9 +49,9 @@ type CCConfig struct {
 
 type CCRequestBody struct {
 	Config   CCConfig     `json:"config"`
-	Memory   string       `json:"memory"`
-	Taste    string       `json:"taste"`
-	Skills   string       `json:"skills"`
+	Memory   any          `json:"memory"`
+	Taste    any          `json:"taste"`
+	Skills   any          `json:"skills"`
 	Params   CCChatParams `json:"params"`
 	ThreadID string       `json:"threadId"`
 }

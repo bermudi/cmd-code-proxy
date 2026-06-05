@@ -1,6 +1,9 @@
 package proxy
 
 import (
+	"context"
+	"encoding/json"
+	"io"
 	"net/http"
 	"testing"
 	"time"
@@ -121,5 +124,113 @@ func TestFilterModels(t *testing.T) {
 	all := filterModels(models, true)
 	if len(all) != 4 {
 		t.Fatalf("expected 4 models when includeClosed=true, got %d", len(all))
+	}
+}
+
+func TestProjectSlugFromPath(t *testing.T) {
+	cases := []struct {
+		in, want string
+	}{
+		{"/Users/patwoz/dev/Personal/pi/pi-commandcode-provider", "users-patwoz-dev-personal-pi-pi-commandcode-provider"},
+		{"/repo", "repo"},
+		{"C:\\Users\\Pat\\Project", "users-pat-project"},
+		{"///", "project"},
+	}
+	for _, c := range cases {
+		got := projectSlugFromPath(c.in)
+		if got != c.want {
+			t.Errorf("projectSlugFromPath(%q) = %q, want %q", c.in, got, c.want)
+		}
+	}
+}
+
+func TestBuildRequest_UsesCLICompatibleContext(t *testing.T) {
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+
+	p := NewProxy("test-key")
+	body, err := p.BuildRequest(api.OpenAIChatRequest{
+		Model: "deepseek-v4-flash",
+		Messages: []api.OpenAIMessage{
+			{Role: "user", Content: "hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildRequest() error = %v", err)
+	}
+
+	if body.Config.WorkingDir != tmp {
+		t.Errorf("WorkingDir = %q, want %q", body.Config.WorkingDir, tmp)
+	}
+	if body.Config.Environment != "cli" {
+		t.Errorf("Environment = %q, want cli", body.Config.Environment)
+	}
+	if body.Config.MainBranch != "" {
+		t.Errorf("MainBranch = %q, want empty string", body.Config.MainBranch)
+	}
+
+	data, err := json.Marshal(body)
+	if err != nil {
+		t.Fatalf("Marshal() error = %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(data, &raw); err != nil {
+		t.Fatalf("Unmarshal() error = %v", err)
+	}
+	for _, key := range []string{"memory", "taste", "skills"} {
+		if _, ok := raw[key]; !ok {
+			t.Fatalf("%s missing from request JSON: %s", key, data)
+		}
+		if raw[key] != nil {
+			t.Errorf("%s = %#v, want JSON null", key, raw[key])
+		}
+	}
+}
+
+func TestCreateUpstreamRequest_SetsCLIHeaders(t *testing.T) {
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+
+	p := NewProxy("test-key")
+	p.BaseURL = "https://example.test"
+	body, err := p.BuildRequest(api.OpenAIChatRequest{
+		Model: "deepseek-v4-flash",
+		Messages: []api.OpenAIMessage{
+			{Role: "user", Content: "hello"},
+		},
+	})
+	if err != nil {
+		t.Fatalf("BuildRequest() error = %v", err)
+	}
+
+	req, err := p.CreateUpstreamRequest(context.Background(), body, "test-key")
+	if err != nil {
+		t.Fatalf("CreateUpstreamRequest() error = %v", err)
+	}
+	defer req.Body.Close()
+
+	if req.Header.Get("x-cli-environment") != "production" {
+		t.Errorf("x-cli-environment = %q, want production", req.Header.Get("x-cli-environment"))
+	}
+	if req.Header.Get("x-project-slug") != projectSlugFromPath(tmp) {
+		t.Errorf("x-project-slug = %q, want %q", req.Header.Get("x-project-slug"), projectSlugFromPath(tmp))
+	}
+	if req.Header.Get("x-taste-learning") != "true" {
+		t.Errorf("x-taste-learning = %q, want true", req.Header.Get("x-taste-learning"))
+	}
+	if req.Header.Get("x-co-flag") != "false" {
+		t.Errorf("x-co-flag = %q, want false", req.Header.Get("x-co-flag"))
+	}
+
+	reqBody, err := io.ReadAll(req.Body)
+	if err != nil {
+		t.Fatalf("ReadAll() error = %v", err)
+	}
+	var raw map[string]any
+	if err := json.Unmarshal(reqBody, &raw); err != nil {
+		t.Fatalf("Unmarshal(request body) error = %v", err)
+	}
+	if raw["memory"] != nil || raw["taste"] != nil || raw["skills"] != nil {
+		t.Errorf("memory/taste/skills = %#v/%#v/%#v, want null/null/null", raw["memory"], raw["taste"], raw["skills"])
 	}
 }

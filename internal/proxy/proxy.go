@@ -10,6 +10,7 @@ import (
 	"log"
 	"math/rand"
 	"net/http"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -69,6 +70,43 @@ func normalizeFinishReason(reason string) string {
 	}
 }
 
+func currentWorkingDir() string {
+	workingDir, err := os.Getwd()
+	if err != nil || workingDir == "" {
+		return "."
+	}
+	return workingDir
+}
+
+func projectSlugFromPath(pathName string) string {
+	var b strings.Builder
+	lastWasDash := false
+
+	pathName = strings.ToLower(pathName)
+	if len(pathName) >= 2 && pathName[1] == ':' && pathName[0] >= 'a' && pathName[0] <= 'z' {
+		pathName = pathName[2:]
+	}
+
+	for _, r := range pathName {
+		isAlnum := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if isAlnum {
+			b.WriteRune(r)
+			lastWasDash = false
+			continue
+		}
+		if !lastWasDash && b.Len() > 0 {
+			b.WriteByte('-')
+			lastWasDash = true
+		}
+	}
+
+	slug := strings.Trim(b.String(), "-")
+	if slug == "" {
+		return "project"
+	}
+	return slug
+}
+
 // Proxy struct
 type Proxy struct {
 	APIKey           string
@@ -95,6 +133,7 @@ func (p *Proxy) BuildRequest(openAIReq api.OpenAIChatRequest) (api.CCRequestBody
 	model := MapModel(openAIReq.Model)
 	system, msgs := ExtractSystem(openAIReq.Messages)
 	ccMessages := ConvertMessages(msgs)
+	workingDir := currentWorkingDir()
 
 	temperature := 0.3
 	maxTokens := 64000
@@ -112,19 +151,19 @@ func (p *Proxy) BuildRequest(openAIReq api.OpenAIChatRequest) (api.CCRequestBody
 
 	ccBody := api.CCRequestBody{
 		Config: api.CCConfig{
-			WorkingDir:    ".",
+			WorkingDir:    workingDir,
 			Date:          time.Now().Format("2006-01-02"),
 			Environment:   "cli",
 			Structure:     []string{},
 			IsGitRepo:     false,
 			CurrentBranch: "",
-			MainBranch:    "main",
+			MainBranch:    "",
 			GitStatus:     "",
 			RecentCommits: []string{},
 		},
-		Memory: "",
-		Taste:  "",
-		Skills: "",
+		Memory: nil,
+		Taste:  nil,
+		Skills: nil,
 		Params: api.CCChatParams{
 			Model:       model,
 			Messages:    ccMessages,
@@ -159,6 +198,9 @@ func (p *Proxy) CreateUpstreamRequest(ctx context.Context, ccBody api.CCRequestB
 	ccReq.Header.Set("Authorization", "Bearer "+apiKey)
 	ccReq.Header.Set("x-command-code-version", version.GetCommandCodeVersion())
 	ccReq.Header.Set("x-cli-environment", "production")
+	ccReq.Header.Set("x-project-slug", projectSlugFromPath(ccBody.Config.WorkingDir))
+	ccReq.Header.Set("x-taste-learning", "true")
+	ccReq.Header.Set("x-co-flag", "false")
 	ccReq.Header.Set("Accept", "text/event-stream")
 
 	return ccReq, nil

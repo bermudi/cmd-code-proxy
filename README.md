@@ -1,6 +1,6 @@
 # CommandCode Proxy Server
 
-OpenAI-compatible proxy server for the CommandCode API. It exposes `/v1/chat/completions` and `/v1/models` endpoints so OpenAI-compatible clients can call CommandCode models through a local HTTP server.
+OpenAI-compatible proxy server for the CommandCode API. It exposes `/v1/chat/completions`, `/chat/completions`, `/v1/responses`, and `/v1/models` endpoints so OpenAI-compatible clients can call CommandCode models through a local HTTP server.
 
 Repository: https://github.com/dev2k6/command-code-proxy-server
 
@@ -8,9 +8,11 @@ Version: `v1.0.8`
 
 ## Features
 
-- OpenAI-compatible chat completions endpoint
+- OpenAI-compatible chat completions endpoint and alias
+- OpenAI Responses-compatible endpoint shim
 - Streaming and non-streaming responses
 - OpenAI-compatible model list endpoint
+- Optional closed/premium model listing
 - Short model name mapping
 - Optional default API key from CLI
 - Per-request API key via `Authorization` header
@@ -44,6 +46,7 @@ go run main.go [options]
 | `-host` | `127.0.0.1` | Host to bind the server to |
 | `-port` | `55990` | Port to run the server on |
 | `-api-key` | empty | Optional default CommandCode API key |
+| `-list-closed-models` | `false` | Include closed/premium models, such as Claude and GPT, in `/v1/models` |
 | `-version` | `false` | Print version and exit |
 
 Examples:
@@ -61,6 +64,9 @@ go run main.go -host 0.0.0.0
 # Use a default API key for all requests that do not include Authorization
 go run main.go -api-key your-commandcode-api-key
 
+# Include closed/premium models in /v1/models
+go run main.go -list-closed-models
+
 # Print version
 go run main.go -version
 ```
@@ -76,8 +82,9 @@ go build -o bin/command-code-proxy
 Cross-compile for Windows and Linux:
 
 ```bash
-GOOS=windows GOARCH=amd64 go build -o bin/command-code-proxy.exe
 GOOS=linux GOARCH=amd64 go build -o bin/command-code-proxy
+GOOS=linux GOARCH=arm64 go build -o bin/command-code-proxy-arm64
+GOOS=windows GOARCH=amd64 go build -o bin/command-code-proxy.exe
 ```
 
 ## API key behavior
@@ -114,13 +121,15 @@ Response:
 GET /v1/models
 ```
 
-Returns an OpenAI-compatible model list.
+Returns an OpenAI-compatible model list. By default, closed/premium models are filtered out; start the proxy with `-list-closed-models` to include them.
 
 ### Chat completions
 
 ```http
 POST /v1/chat/completions
 ```
+
+`POST /chat/completions` is also registered as an OpenAI-compatible alias.
 
 Example non-streaming request:
 
@@ -150,6 +159,28 @@ curl -N http://127.0.0.1:55990/v1/chat/completions \
       {"role": "user", "content": "Write a short poem."}
     ],
     "stream": true
+  }'
+```
+
+### Responses
+
+```http
+POST /v1/responses
+```
+
+Accepts a subset of OpenAI Responses API requests and rewrites them internally to chat completions. `input` can be a string or an array of role/content items; `instructions` are converted to a system message.
+
+Example request:
+
+```bash
+curl http://127.0.0.1:55990/v1/responses \
+  -H "Content-Type: application/json" \
+  -H "Authorization: Bearer your-commandcode-api-key" \
+  -d '{
+    "model": "deepseek-v4-pro",
+    "instructions": "You are concise.",
+    "input": "Explain what this proxy does in one sentence.",
+    "max_output_tokens": 200
   }'
 ```
 
@@ -190,6 +221,7 @@ Unknown model names are passed through unchanged.
 ├── main.go
 ├── bin
 │   ├── command-code-proxy
+│   ├── command-code-proxy-arm64
 │   └── command-code-proxy.exe
 └── internal
     ├── api
@@ -197,7 +229,9 @@ Unknown model names are passed through unchanged.
     │   └── openai.go
     ├── proxy
     │   ├── convert.go
+    │   ├── convert_test.go
     │   ├── model.go
+    │   ├── model_test.go
     │   └── proxy.go
     ├── server
     │   └── server.go
@@ -213,6 +247,22 @@ Unknown model names are passed through unchanged.
 2. The proxy extracts system messages, maps the model name, and converts messages to CommandCode format.
 3. The proxy sends the request to `https://api.commandcode.ai/alpha/generate`.
 4. CommandCode streaming NDJSON events are converted back to OpenAI-compatible SSE chunks or collected into a single JSON response.
+
+Every upstream request is sent with `stream: true`. For non-streaming clients, the proxy buffers the NDJSON stream and assembles the final JSON response.
+
+## CommandCode request context
+
+The upstream request includes CLI-compatible context fields and headers:
+
+- `config.workingDir` is the proxy process working directory.
+- `config.environment` is `cli`.
+- `memory`, `taste`, and `skills` are sent as JSON `null`.
+- `x-cli-environment: production`
+- `x-project-slug: <slugified working directory>`
+- `x-taste-learning: true`
+- `x-co-flag: false`
+
+If you run the proxy as a long-lived service, start it from the project directory you want CommandCode to see.
 
 ## Version check
 
