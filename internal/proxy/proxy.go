@@ -1,7 +1,6 @@
 package proxy
 
 import (
-	"bufio"
 	"bytes"
 	"encoding/json"
 	"errors"
@@ -239,7 +238,7 @@ func (p *Proxy) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// StreamResponse handles streaming response from CommandCode to OpenAI SSE
+// StreamResponse handles streaming response from CommandCode to OpenAI SSE.
 func (p *Proxy) StreamResponse(w http.ResponseWriter, r *http.Request, body io.ReadCloser, requestID, model string, created int64) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
@@ -252,32 +251,23 @@ func (p *Proxy) StreamResponse(w http.ResponseWriter, r *http.Request, body io.R
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
 
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	t := NewEventTranslator(body)
 	sentRole := false
 	toolCallIndex := 0
 	toolCallIndexes := map[string]int{}
 
-	for scanner.Scan() {
+	for t.Next() {
 		select {
 		case <-r.Context().Done():
 			return
 		default:
 		}
 
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		p.debugf("[DEBUG] CommandCode stream line: %s", truncateLog(line))
-
-		var event api.CCStreamEvent
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			continue
-		}
+		event := t.Event()
+		p.debugf("[DEBUG] CommandCode stream line: %s", truncateLog(event.RawLine))
 
 		switch event.Type {
-		case "text-delta":
+		case EventTextDelta:
 			delta := api.OpenAIDelta{Content: event.Text}
 			if !sentRole {
 				delta.Role = "assistant"
@@ -291,10 +281,10 @@ func (p *Proxy) StreamResponse(w http.ResponseWriter, r *http.Request, body io.R
 				Choices: []api.OpenAIChoice{{Index: 0, Delta: &delta}},
 			})
 
-		case "reasoning-start":
-			// State change: entering reasoning mode. No output needed.
+		case EventReasoningStart:
+			// State change: entering reasoning mode.
 
-		case "reasoning-delta":
+		case EventReasoningDelta:
 			delta := api.OpenAIDelta{ReasoningContent: event.Text}
 			if !sentRole {
 				delta.Role = "assistant"
@@ -308,13 +298,13 @@ func (p *Proxy) StreamResponse(w http.ResponseWriter, r *http.Request, body io.R
 				Choices: []api.OpenAIChoice{{Index: 0, Delta: &delta}},
 			})
 
-		case "reasoning-end":
-			// State change: exiting reasoning mode. No output needed.
+		case EventReasoningEnd:
+			// State change: exiting reasoning mode.
 
-		case "tool-result":
-			// Tool result events in stream are informational; no action needed.
+		case EventToolResult:
+			// Informational; no output needed.
 
-		case "tool-use":
+		case EventToolUse:
 			toolCalls := []api.OpenAIDeltaToolCall{{
 				Index:    toolCallIndex,
 				ID:       event.ToolCallID,
@@ -335,7 +325,7 @@ func (p *Proxy) StreamResponse(w http.ResponseWriter, r *http.Request, body io.R
 			})
 			toolCallIndex++
 
-		case "tool-delta":
+		case EventToolDelta:
 			toolCalls := []api.OpenAIDeltaToolCall{{
 				Index:    toolCallIndex - 1,
 				Function: &api.OpenAIDeltaFunction{Arguments: event.Text},
@@ -348,7 +338,7 @@ func (p *Proxy) StreamResponse(w http.ResponseWriter, r *http.Request, body io.R
 				Choices: []api.OpenAIChoice{{Index: 0, Delta: &api.OpenAIDelta{ToolCalls: toolCalls}}},
 			})
 
-		case "tool-input-start":
+		case EventToolInputStart:
 			if _, ok := toolCallIndexes[event.ID]; !ok {
 				toolCallIndexes[event.ID] = toolCallIndex
 				toolCallIndex++
@@ -373,7 +363,7 @@ func (p *Proxy) StreamResponse(w http.ResponseWriter, r *http.Request, body io.R
 				Choices: []api.OpenAIChoice{{Index: 0, Delta: &delta}},
 			})
 
-		case "tool-input-delta":
+		case EventToolInputDelta:
 			idx, ok := toolCallIndexes[event.ID]
 			if !ok {
 				idx = toolCallIndex
@@ -391,7 +381,7 @@ func (p *Proxy) StreamResponse(w http.ResponseWriter, r *http.Request, body io.R
 				}}}}},
 			})
 
-		case "tool-call":
+		case EventToolCall:
 			if _, alreadyStreamed := toolCallIndexes[event.ToolCallID]; alreadyStreamed {
 				continue
 			}
@@ -425,7 +415,7 @@ func (p *Proxy) StreamResponse(w http.ResponseWriter, r *http.Request, body io.R
 				Choices: []api.OpenAIChoice{{Index: 0, Delta: &delta}},
 			})
 
-		case "finish":
+		case EventFinish:
 			reason := normalizeFinishReason(event.FinishReason)
 			p.WriteSSE(w, flusher, api.OpenAIChatResponse{
 				ID:      requestID,
@@ -441,12 +431,12 @@ func (p *Proxy) StreamResponse(w http.ResponseWriter, r *http.Request, body io.R
 			fmt.Fprintf(w, "data: [DONE]\n\n")
 			flusher.Flush()
 
-		case "error":
+		case EventError:
 			log.Printf("[ERROR] Stream error: %v", event.Error)
 		}
 	}
 
-	if err := scanner.Err(); err != nil && err != io.EOF {
+	if err := t.Err(); err != nil && err != io.EOF {
 		log.Printf("[ERROR] Scanner error: %v", err)
 	}
 }
@@ -458,10 +448,9 @@ func (p *Proxy) WriteSSE(w io.Writer, flusher http.Flusher, resp api.OpenAIChatR
 	flusher.Flush()
 }
 
-// NonStreamResponse handles non-streaming response
+// NonStreamResponse handles non-streaming response by buffering the full stream.
 func (p *Proxy) NonStreamResponse(w http.ResponseWriter, body io.ReadCloser, requestID, model string, created int64) {
-	scanner := bufio.NewScanner(body)
-	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
+	t := NewEventTranslator(body)
 
 	var content strings.Builder
 	var reasoningContent strings.Builder
@@ -471,28 +460,20 @@ func (p *Proxy) NonStreamResponse(w http.ResponseWriter, body io.ReadCloser, req
 	toolCallByID := map[string]int{}
 	toolInputBuffers := map[string]*strings.Builder{}
 
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line == "" {
-			continue
-		}
-		p.debugf("[DEBUG] CommandCode stream line: %s", truncateLog(line))
-
-		var event api.CCStreamEvent
-		if err := json.Unmarshal([]byte(line), &event); err != nil {
-			continue
-		}
+	for t.Next() {
+		event := t.Event()
+		p.debugf("[DEBUG] CommandCode stream line: %s", truncateLog(event.RawLine))
 
 		switch event.Type {
-		case "text-delta":
+		case EventTextDelta:
 			content.WriteString(event.Text)
-		case "reasoning-start":
+		case EventReasoningStart:
 			// no-op
-		case "reasoning-delta":
+		case EventReasoningDelta:
 			reasoningContent.WriteString(event.Text)
-		case "reasoning-end":
+		case EventReasoningEnd:
 			// no-op
-		case "tool-use":
+		case EventToolUse:
 			hasToolCalls = true
 			toolCallByID[event.ToolCallID] = len(toolCalls)
 			toolCalls = append(toolCalls, api.ToolCall{
@@ -503,11 +484,11 @@ func (p *Proxy) NonStreamResponse(w http.ResponseWriter, body io.ReadCloser, req
 					Arguments: "",
 				},
 			})
-		case "tool-delta":
+		case EventToolDelta:
 			if len(toolCalls) > 0 {
 				toolCalls[len(toolCalls)-1].Function.Arguments += event.Text
 			}
-		case "tool-input-start":
+		case EventToolInputStart:
 			hasToolCalls = true
 			toolCallByID[event.ID] = len(toolCalls)
 			toolInputBuffers[event.ID] = &strings.Builder{}
@@ -519,14 +500,14 @@ func (p *Proxy) NonStreamResponse(w http.ResponseWriter, body io.ReadCloser, req
 					Arguments: "",
 				},
 			})
-		case "tool-input-delta":
+		case EventToolInputDelta:
 			if b := toolInputBuffers[event.ID]; b != nil {
 				b.WriteString(event.Delta)
 			}
 			if idx, ok := toolCallByID[event.ID]; ok {
 				toolCalls[idx].Function.Arguments += event.Delta
 			}
-		case "tool-call":
+		case EventToolCall:
 			hasToolCalls = true
 			args := ""
 			if event.Input != nil {
@@ -550,16 +531,16 @@ func (p *Proxy) NonStreamResponse(w http.ResponseWriter, body io.ReadCloser, req
 					},
 				})
 			}
-		case "tool-result":
-			// Tool result events in stream are informational; no action needed
-		case "finish":
-			if event.TotalUsage != nil {
-				inputTokens = event.TotalUsage.InputTokens
-				outputTokens = event.TotalUsage.OutputTokens
-				cacheReadTokens = event.TotalUsage.CacheReadInputTokens
-				cacheWriteTokens = event.TotalUsage.CacheCreationInputTokens
+		case EventToolResult:
+			// Informational; no action needed.
+		case EventFinish:
+			if event.Usage != nil {
+				inputTokens = event.Usage.InputTokens
+				outputTokens = event.Usage.OutputTokens
+				cacheReadTokens = event.Usage.CacheReadInputTokens
+				cacheWriteTokens = event.Usage.CacheCreationInputTokens
 			}
-		case "error":
+		case EventError:
 			log.Printf("[ERROR] Stream error: %v", event.Error)
 		}
 	}
