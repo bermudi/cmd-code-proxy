@@ -1,4 +1,4 @@
-module github.com/dev2k6/command-code-proxy-server
+module github.com/bermudi/cmd-code-proxy
 
 go 1.26.2
 

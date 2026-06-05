@@ -4,7 +4,7 @@ import (
 	"reflect"
 	"testing"
 
-	"github.com/dev2k6/command-code-proxy-server/internal/api"
+	"github.com/bermudi/cmd-code-proxy/internal/api"
 )
 
 func TestParseContent_ReasoningParts(t *testing.T) {

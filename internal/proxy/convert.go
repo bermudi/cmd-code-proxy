@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/dev2k6/command-code-proxy-server/internal/api"
+	"github.com/bermudi/cmd-code-proxy/internal/api"
 )
 
 // Convert OpenAI messages to CommandCode format

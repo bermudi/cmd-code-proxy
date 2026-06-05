@@ -2,7 +2,7 @@
 
 OpenAI-compatible proxy server for the CommandCode API. It exposes `/v1/chat/completions`, `/chat/completions`, `/v1/responses`, and `/v1/models` endpoints so OpenAI-compatible clients can call CommandCode models through a local HTTP server.
 
-Repository: https://github.com/dev2k6/command-code-proxy-server
+Repository: https://github.com/bermudi/cmd-code-proxy
 
 Version: `v1.0.8`
 
@@ -17,7 +17,6 @@ Version: `v1.0.8`
 - Optional default API key from CLI
 - Per-request API key via `Authorization` header
 - Configurable host and port
-- Checks GitHub tags for a newer proxy version and displays it next to the current version
 
 ## Requirements
 
@@ -219,10 +218,6 @@ Unknown model names are passed through unchanged.
 ├── go.mod
 ├── go.sum
 ├── main.go
-├── bin
-│   ├── command-code-proxy
-│   ├── command-code-proxy-arm64
-│   └── command-code-proxy.exe
 └── internal
     ├── api
     │   ├── commandcode.go
@@ -232,11 +227,10 @@ Unknown model names are passed through unchanged.
     │   ├── convert_test.go
     │   ├── model.go
     │   ├── model_test.go
-    │   └── proxy.go
+    │   ├── proxy.go
+    │   └── proxy_test.go
     ├── server
     │   └── server.go
-    ├── update
-    │   └── update.go
     └── version
         └── version.go
 ```
@@ -263,20 +257,6 @@ The upstream request includes CLI-compatible context fields and headers:
 - `x-co-flag: false`
 
 If you run the proxy as a long-lived service, start it from the project directory you want CommandCode to see.
-
-## Version check
-
-On startup and when running `-version`, the proxy calls:
-
-```text
-https://api.github.com/repos/dev2k6/command-code-proxy-server/tags
-```
-
-If the latest GitHub tag is newer than the current app version, the version line is displayed as:
-
-```text
-v1.0.8 (latest: v1.x.x)
-```
 
 ## CommandCode version header
 

@@ -4,13 +4,12 @@ import (
 	"flag"
 	"fmt"
 
-	"github.com/dev2k6/command-code-proxy-server/internal/proxy"
-	"github.com/dev2k6/command-code-proxy-server/internal/server"
-	"github.com/dev2k6/command-code-proxy-server/internal/update"
+	"github.com/bermudi/cmd-code-proxy/internal/proxy"
+	"github.com/bermudi/cmd-code-proxy/internal/server"
 )
 
 const appVersion = "v1.0.8"
-const repositoryURL = "https://github.com/dev2k6/command-code-proxy-server"
+const repositoryURL = "https://github.com/bermudi/cmd-code-proxy"
 const debugLogging = false
 
 func main() {
@@ -22,11 +21,11 @@ func main() {
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Println(versionText())
+		fmt.Println(appVersion)
 		return
 	}
 
-	proxy := proxy.NewProxy(*apiKey)
+	proxy := proxy.NewProxy(*apiKey, proxy.NewCCAdapter().WithDebug(debugLogging))
 	proxy.Debug = debugLogging
 	proxy.ListClosedModels = *listClosed
 
@@ -39,21 +38,13 @@ func main() {
 	srv.Start()
 }
 
-func versionText() string {
-	latest, hasUpdate, err := update.LatestVersion(appVersion)
-	if err != nil || !hasUpdate {
-		return appVersion
-	}
-	return fmt.Sprintf("%s (latest: %s)", appVersion, latest)
-}
-
 func printStartupInfo(srv *server.Server) {
 	fmt.Println("")
 	fmt.Println("========================================")
 	fmt.Println("  CommandCode Proxy Server")
 	fmt.Println("========================================")
 	fmt.Println("")
-	fmt.Printf("  Version:     %s\n", versionText())
+	fmt.Printf("  Version:     %s\n", appVersion)
 	fmt.Printf("  Repository:  %s\n", repositoryURL)
 	fmt.Printf("  Host:        %s\n", srv.GetHost())
 	fmt.Printf("  Port:        %s\n", srv.GetPort())

@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dev2k6/command-code-proxy-server/internal/api"
+	"github.com/bermudi/cmd-code-proxy/internal/api"
 )
 
 func TestMapModel(t *testing.T) {
@@ -148,8 +148,7 @@ func TestBuildRequest_UsesCLICompatibleContext(t *testing.T) {
 	tmp := t.TempDir()
 	t.Chdir(tmp)
 
-	p := NewProxy("test-key")
-	body, err := p.BuildRequest(api.OpenAIChatRequest{
+	body, err := BuildCCRequest(api.OpenAIChatRequest{
 		Model: "deepseek-v4-flash",
 		Messages: []api.OpenAIMessage{
 			{Role: "user", Content: "hello"},
@@ -191,9 +190,7 @@ func TestCreateUpstreamRequest_SetsCLIHeaders(t *testing.T) {
 	tmp := t.TempDir()
 	t.Chdir(tmp)
 
-	p := NewProxy("test-key")
-	p.BaseURL = "https://example.test"
-	body, err := p.BuildRequest(api.OpenAIChatRequest{
+	body, err := BuildCCRequest(api.OpenAIChatRequest{
 		Model: "deepseek-v4-flash",
 		Messages: []api.OpenAIMessage{
 			{Role: "user", Content: "hello"},
@@ -203,7 +200,8 @@ func TestCreateUpstreamRequest_SetsCLIHeaders(t *testing.T) {
 		t.Fatalf("BuildRequest() error = %v", err)
 	}
 
-	req, err := p.CreateUpstreamRequest(context.Background(), body, "test-key")
+	a := &ccAdapter{baseURL: "https://example.test"}
+	req, err := a.createUpstreamRequest(context.Background(), body, "test-key")
 	if err != nil {
 		t.Fatalf("CreateUpstreamRequest() error = %v", err)
 	}

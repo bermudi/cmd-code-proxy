@@ -5,7 +5,7 @@ import (
 	"net/http"
 	"time"
 
-	"github.com/dev2k6/command-code-proxy-server/internal/proxy"
+	"github.com/bermudi/cmd-code-proxy/internal/proxy"
 )
 
 const defaultPort = "55990"

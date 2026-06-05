@@ -9,13 +9,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/dev2k6/command-code-proxy-server/internal/api"
+	"github.com/bermudi/cmd-code-proxy/internal/api"
 )
 
 func TestStreamResponse_ReasoningDelta(t *testing.T) {
 	p := &Proxy{Debug: false}
 
-	// Simulate upstream NDJSON body
 	lines := []string{
 		`{"type":"reasoning-start"}`,
 		`{"type":"reasoning-delta","text":"Let me think"}`,
@@ -25,12 +24,11 @@ func TestStreamResponse_ReasoningDelta(t *testing.T) {
 		`{"type":"finish","finishReason":"stop"}`,
 	}
 	body := io.NopCloser(strings.NewReader(strings.Join(lines, "\n")))
-	ccResp := &http.Response{Body: body}
 
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest("POST", "/v1/chat/completions", nil)
 
-	p.StreamResponse(rec, req, ccResp, "chatcmpl-test", "test-model", time.Now().Unix())
+	p.StreamResponse(rec, req, body, "chatcmpl-test", "test-model", time.Now().Unix())
 
 	resp := rec.Result()
 	if resp.StatusCode != http.StatusOK {
@@ -38,7 +36,6 @@ func TestStreamResponse_ReasoningDelta(t *testing.T) {
 	}
 
 	data, _ := io.ReadAll(resp.Body)
-	// SSE format: each line starts with "data: "
 	chunks := extractSSEData(string(data))
 
 	var reasoningContent string
@@ -77,10 +74,9 @@ func TestNonStreamResponse_ReasoningDelta(t *testing.T) {
 		`{"type":"finish","finishReason":"stop","totalUsage":{"inputTokens":10,"outputTokens":5}}`,
 	}
 	body := io.NopCloser(strings.NewReader(strings.Join(lines, "\n")))
-	ccResp := &http.Response{Body: body}
 
 	rec := httptest.NewRecorder()
-	p.NonStreamResponse(rec, ccResp, "chatcmpl-test", "test-model", time.Now().Unix())
+	p.NonStreamResponse(rec, body, "chatcmpl-test", "test-model", time.Now().Unix())
 
 	resp := rec.Result()
 	if resp.StatusCode != http.StatusOK {
@@ -104,15 +100,4 @@ func TestNonStreamResponse_ReasoningDelta(t *testing.T) {
 	if content, ok := msg.Content.(string); !ok || content != "The answer is 42" {
 		t.Errorf("Content = %v, want %q", msg.Content, "The answer is 42")
 	}
-}
-
-func extractSSEData(raw string) []string {
-	var out []string
-	for _, line := range strings.Split(raw, "\n") {
-		line = strings.TrimSpace(line)
-		if strings.HasPrefix(line, "data: ") {
-			out = append(out, strings.TrimPrefix(line, "data: "))
-		}
-	}
-	return out
 }

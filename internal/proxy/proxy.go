@@ -3,35 +3,21 @@ package proxy
 import (
 	"bufio"
 	"bytes"
-	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
-	"math/rand"
 	"net/http"
 	"os"
-	"strconv"
 	"strings"
-	"sync"
 	"time"
 
-	"github.com/dev2k6/command-code-proxy-server/internal/api"
-	"github.com/dev2k6/command-code-proxy-server/internal/version"
+	"github.com/bermudi/cmd-code-proxy/internal/api"
 	"github.com/google/uuid"
 )
 
-const defaultBaseURL = "https://api.commandcode.ai"
-const defaultTimeout = 300 * time.Second
 const debugLogLimit = 20000
-
-const (
-	maxRetries     = 3
-	baseRetryDelay = 1 * time.Second
-	maxRetryDelay  = 30 * time.Second
-)
-
-const modelsCacheTTL = 5 * time.Minute
 
 func truncateLog(s string) string {
 	if len(s) <= debugLogLimit {
@@ -107,29 +93,24 @@ func projectSlugFromPath(pathName string) string {
 	return slug
 }
 
-// Proxy struct
+// Proxy holds handler logic and an Upstream adapter.
 type Proxy struct {
 	APIKey           string
-	BaseURL          string
-	Client           *http.Client
 	Debug            bool
 	ListClosedModels bool
-	modelsCache      []api.OpenAIModel
-	modelsCacheTime  time.Time
-	modelsCacheMu    sync.RWMutex
+	upstream         Upstream
 }
 
-// NewProxy creates a new proxy instance
-func NewProxy(apiKey string) *Proxy {
+// NewProxy creates a new proxy with the given upstream adapter.
+func NewProxy(apiKey string, upstream Upstream) *Proxy {
 	return &Proxy{
-		APIKey:  apiKey,
-		BaseURL: defaultBaseURL,
-		Client:  &http.Client{Timeout: defaultTimeout},
+		APIKey:   apiKey,
+		upstream: upstream,
 	}
 }
 
-// BuildRequest builds the CommandCode request body
-func (p *Proxy) BuildRequest(openAIReq api.OpenAIChatRequest) (api.CCRequestBody, error) {
+// BuildCCRequest builds the CommandCode request body (pure data transform).
+func BuildCCRequest(openAIReq api.OpenAIChatRequest) (api.CCRequestBody, error) {
 	model := MapModel(openAIReq.Model)
 	system, msgs := ExtractSystem(openAIReq.Messages)
 	ccMessages := ConvertMessages(msgs)
@@ -179,197 +160,6 @@ func (p *Proxy) BuildRequest(openAIReq api.OpenAIChatRequest) (api.CCRequestBody
 	return ccBody, nil
 }
 
-// CreateUpstreamRequest creates a new HTTP request to the CommandCode API
-func (p *Proxy) CreateUpstreamRequest(ctx context.Context, ccBody api.CCRequestBody, apiKey string) (*http.Request, error) {
-	reqJSON, err := json.Marshal(ccBody)
-	if err != nil {
-		return nil, fmt.Errorf("failed to build request: %w", err)
-	}
-
-	p.debugf("[DEBUG] CommandCode request body: %s", truncateLog(string(reqJSON)))
-
-	ccReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
-		p.BaseURL+"/alpha/generate", bytes.NewReader(reqJSON))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create upstream request: %w", err)
-	}
-
-	ccReq.Header.Set("Content-Type", "application/json")
-	ccReq.Header.Set("Authorization", "Bearer "+apiKey)
-	ccReq.Header.Set("x-command-code-version", version.GetCommandCodeVersion())
-	ccReq.Header.Set("x-cli-environment", "production")
-	ccReq.Header.Set("x-project-slug", projectSlugFromPath(ccBody.Config.WorkingDir))
-	ccReq.Header.Set("x-taste-learning", "true")
-	ccReq.Header.Set("x-co-flag", "false")
-	ccReq.Header.Set("Accept", "text/event-stream")
-
-	return ccReq, nil
-}
-
-// CallUpstream makes the request to CommandCode API
-func (p *Proxy) CallUpstream(req *http.Request) (*http.Response, error) {
-	resp, err := p.Client.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("upstream error: %w", err)
-	}
-	return resp, nil
-}
-
-// DoUpstream calls upstream with retry on 429/5xx
-func (p *Proxy) DoUpstream(ctx context.Context, ccBody api.CCRequestBody, apiKey string) (*http.Response, error) {
-	var lastErr error
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		if attempt > 0 {
-			delay := calculateBackoff(attempt)
-			if delay > maxRetryDelay {
-				delay = maxRetryDelay
-			}
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(delay):
-			}
-		}
-
-		ccReq, err := p.CreateUpstreamRequest(ctx, ccBody, apiKey)
-		if err != nil {
-			return nil, err
-		}
-
-		resp, err := p.Client.Do(ccReq)
-		if err != nil {
-			lastErr = err
-			p.debugf("[DEBUG] Request failed (attempt %d/%d): %v", attempt+1, maxRetries+1, err)
-			continue
-		}
-
-		if resp.StatusCode == http.StatusTooManyRequests || (resp.StatusCode >= 500 && resp.StatusCode < 600) {
-			lastErr = fmt.Errorf("upstream status %d", resp.StatusCode)
-			retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
-			body, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			if retryAfter > 0 {
-				p.debugf("[DEBUG] Upstream %d, Retry-After=%s, retrying (%d/%d): %s", resp.StatusCode, retryAfter, attempt+1, maxRetries+1, string(body))
-				select {
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				case <-time.After(retryAfter):
-				}
-			} else {
-				p.debugf("[DEBUG] Upstream %d, retrying (%d/%d): %s", resp.StatusCode, attempt+1, maxRetries+1, string(body))
-			}
-			continue
-		}
-
-		return resp, nil
-	}
-	return nil, fmt.Errorf("max retries exceeded: %w", lastErr)
-}
-
-func parseRetryAfter(value string) time.Duration {
-	if value == "" {
-		return 0
-	}
-	if sec, err := strconv.Atoi(value); err == nil && sec > 0 {
-		return time.Duration(sec) * time.Second
-	}
-	if t, err := http.ParseTime(value); err == nil {
-		until := time.Until(t)
-		if until > 0 {
-			return until
-		}
-	}
-	return 0
-}
-
-func calculateBackoff(attempt int) time.Duration {
-	base := baseRetryDelay * time.Duration(1<<attempt)    // 1s, 2s, 4s
-	jitter := time.Duration(rand.Int63n(int64(base) / 5)) // ±20%
-	return base + jitter
-}
-
-func extractOwner(modelID string) string {
-	parts := strings.SplitN(modelID, "/", 2)
-	if len(parts) >= 2 {
-		return parts[0]
-	}
-	return "unknown"
-}
-
-func isOpenModel(m api.OpenAIModel) bool {
-	// Open-source providers use provider/model format (e.g. "deepseek/deepseek-v4-pro").
-	// Closed/premium models (Claude, GPT) use bare IDs without a slash.
-	return strings.Contains(m.ID, "/")
-}
-
-func filterModels(models []api.OpenAIModel, includeClosed bool) []api.OpenAIModel {
-	if includeClosed {
-		return models
-	}
-	openModels := make([]api.OpenAIModel, 0, len(models))
-	for _, m := range models {
-		if isOpenModel(m) {
-			openModels = append(openModels, m)
-		}
-	}
-	return openModels
-}
-
-// FetchModels fetches model list from upstream with caching
-func (p *Proxy) FetchModels(apiKey string) ([]api.OpenAIModel, error) {
-	p.modelsCacheMu.RLock()
-	if len(p.modelsCache) > 0 && time.Since(p.modelsCacheTime) < modelsCacheTTL {
-		cached := p.modelsCache
-		p.modelsCacheMu.RUnlock()
-		return cached, nil
-	}
-	p.modelsCacheMu.RUnlock()
-
-	req, err := http.NewRequest(http.MethodGet, p.BaseURL+"/provider/v1/models", nil)
-	if err != nil {
-		return nil, err
-	}
-	req.Header.Set("Authorization", "Bearer "+apiKey)
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := p.Client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("upstream status %d", resp.StatusCode)
-	}
-
-	var modelList api.OpenAIModelList
-	if err := json.NewDecoder(resp.Body).Decode(&modelList); err != nil {
-		return nil, fmt.Errorf("decode models: %w", err)
-	}
-
-	models := make([]api.OpenAIModel, len(modelList.Data))
-	for i, m := range modelList.Data {
-		owner := m.OwnedBy
-		if owner == "" {
-			owner = extractOwner(m.ID)
-		}
-		models[i] = api.OpenAIModel{
-			ID:      m.ID,
-			Object:  "model",
-			Created: 0,
-			OwnedBy: owner,
-		}
-	}
-	filtered := filterModels(models, p.ListClosedModels)
-
-	p.modelsCacheMu.Lock()
-	p.modelsCache = filtered
-	p.modelsCacheTime = time.Now()
-	p.modelsCacheMu.Unlock()
-
-	return filtered, nil
-}
-
 // HandleChatCompletions handles the /v1/chat/completions endpoint
 func (p *Proxy) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -410,49 +200,47 @@ func (p *Proxy) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Build CommandCode request
-	ccBody, err := p.BuildRequest(openAIReq)
+	ccBody, err := BuildCCRequest(openAIReq)
 	if err != nil {
 		p.writeOpenAIError(w, http.StatusInternalServerError, "Failed to build request", "server_error")
 		return
 	}
 
-	// Call upstream with retry
-	ccResp, err := p.DoUpstream(r.Context(), ccBody, apiKey)
+	// Call upstream
+	respBody, err := p.upstream.Generate(r.Context(), ccBody, apiKey)
 	if err != nil {
-		p.writeOpenAIError(w, http.StatusBadGateway, err.Error(), "api_error")
+		var ue *UpstreamError
+		if errors.As(err, &ue) {
+			message := fmt.Sprintf("Upstream error: %s", ue.Body)
+			log.Printf("[ERROR] Upstream returned %d: %s", ue.StatusCode, ue.Body)
+			if ue.StatusCode >= http.StatusBadRequest && ue.StatusCode < http.StatusInternalServerError {
+				reqJSON, _ := json.Marshal(ccBody)
+				log.Printf("[ERROR] Request body that caused %d: %s", ue.StatusCode, truncateLog(string(reqJSON)))
+			}
+			status := http.StatusBadGateway
+			if ue.StatusCode >= http.StatusBadRequest && ue.StatusCode < http.StatusInternalServerError {
+				status = ue.StatusCode
+			}
+			p.writeOpenAIError(w, status, message, "api_error")
+		} else {
+			p.writeOpenAIError(w, http.StatusBadGateway, err.Error(), "api_error")
+		}
 		return
 	}
-	defer ccResp.Body.Close()
-
-	if ccResp.StatusCode != http.StatusOK {
-		errBody, _ := io.ReadAll(ccResp.Body)
-		message := fmt.Sprintf("Upstream error: %s", string(errBody))
-		log.Printf("[ERROR] Upstream returned %d: %s", ccResp.StatusCode, string(errBody))
-		// Log request body on 4xx for debugging
-		if ccResp.StatusCode >= http.StatusBadRequest && ccResp.StatusCode < http.StatusInternalServerError {
-			reqJSON, _ := json.Marshal(ccBody)
-			log.Printf("[ERROR] Request body that caused %d: %s", ccResp.StatusCode, truncateLog(string(reqJSON)))
-		}
-		status := http.StatusBadGateway
-		if ccResp.StatusCode >= http.StatusBadRequest && ccResp.StatusCode < http.StatusInternalServerError {
-			status = ccResp.StatusCode
-		}
-		p.writeOpenAIError(w, status, message, "api_error")
-		return
-	}
+	defer respBody.Close()
 
 	requestID := "chatcmpl-" + uuid.New().String()[:29]
 	created := time.Now().Unix()
 
 	if openAIReq.Stream {
-		p.StreamResponse(w, r, ccResp, requestID, ccBody.Params.Model, created)
+		p.StreamResponse(w, r, respBody, requestID, ccBody.Params.Model, created)
 	} else {
-		p.NonStreamResponse(w, ccResp, requestID, ccBody.Params.Model, created)
+		p.NonStreamResponse(w, respBody, requestID, ccBody.Params.Model, created)
 	}
 }
 
 // StreamResponse handles streaming response from CommandCode to OpenAI SSE
-func (p *Proxy) StreamResponse(w http.ResponseWriter, r *http.Request, ccResp *http.Response, requestID, model string, created int64) {
+func (p *Proxy) StreamResponse(w http.ResponseWriter, r *http.Request, body io.ReadCloser, requestID, model string, created int64) {
 	flusher, ok := w.(http.Flusher)
 	if !ok {
 		p.writeOpenAIError(w, http.StatusInternalServerError, "Streaming not supported", "server_error")
@@ -464,7 +252,7 @@ func (p *Proxy) StreamResponse(w http.ResponseWriter, r *http.Request, ccResp *h
 	w.Header().Set("Connection", "keep-alive")
 	w.WriteHeader(http.StatusOK)
 
-	scanner := bufio.NewScanner(ccResp.Body)
+	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 	sentRole := false
 	toolCallIndex := 0
@@ -671,8 +459,8 @@ func (p *Proxy) WriteSSE(w io.Writer, flusher http.Flusher, resp api.OpenAIChatR
 }
 
 // NonStreamResponse handles non-streaming response
-func (p *Proxy) NonStreamResponse(w http.ResponseWriter, ccResp *http.Response, requestID, model string, created int64) {
-	scanner := bufio.NewScanner(ccResp.Body)
+func (p *Proxy) NonStreamResponse(w http.ResponseWriter, body io.ReadCloser, requestID, model string, created int64) {
+	scanner := bufio.NewScanner(body)
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 
 	var content strings.Builder
@@ -777,8 +565,8 @@ func (p *Proxy) NonStreamResponse(w http.ResponseWriter, ccResp *http.Response, 
 	}
 
 	msg := &api.OpenAIMessage{
-		Role:             "assistant",
-		Content:          content.String(),
+		Role:    "assistant",
+		Content: content.String(),
 	}
 	if reasoningContent.Len() > 0 {
 		msg.ReasoningContent = reasoningContent.String()
@@ -956,18 +744,44 @@ func (p *Proxy) HandleModels(w http.ResponseWriter, r *http.Request) {
 	var models []api.OpenAIModel
 	if apiKey != "" {
 		var err error
-		models, err = p.FetchModels(apiKey)
+		models, err = p.upstream.FetchModels(r.Context(), apiKey)
 		if err != nil {
 			p.debugf("[DEBUG] Failed to fetch models dynamically: %v. Using fallback.", err)
 		}
 	}
-	if models == nil {
-		models = filterModels(fallbackModels, p.ListClosedModels)
+	if len(models) == 0 {
+		models = fallbackModels
 	}
+	models = filterModels(models, p.ListClosedModels)
 
 	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(api.OpenAIModelList{
 		Object: "list",
 		Data:   models,
 	})
+}
+
+func extractOwner(modelID string) string {
+	parts := strings.SplitN(modelID, "/", 2)
+	if len(parts) >= 2 {
+		return parts[0]
+	}
+	return "unknown"
+}
+
+func isOpenModel(m api.OpenAIModel) bool {
+	return strings.Contains(m.ID, "/")
+}
+
+func filterModels(models []api.OpenAIModel, includeClosed bool) []api.OpenAIModel {
+	if includeClosed {
+		return models
+	}
+	openModels := make([]api.OpenAIModel, 0, len(models))
+	for _, m := range models {
+		if isOpenModel(m) {
+			openModels = append(openModels, m)
+		}
+	}
+	return openModels
 }
