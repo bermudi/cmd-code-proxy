@@ -507,7 +507,7 @@ func (p *Proxy) StreamResponse(w http.ResponseWriter, r *http.Request, ccResp *h
 			// State change: entering reasoning mode. No output needed.
 
 		case "reasoning-delta":
-			delta := api.OpenAIDelta{Content: event.Text}
+			delta := api.OpenAIDelta{ReasoningContent: event.Text}
 			if !sentRole {
 				delta.Role = "assistant"
 				sentRole = true
@@ -676,6 +676,7 @@ func (p *Proxy) NonStreamResponse(w http.ResponseWriter, ccResp *http.Response, 
 	scanner.Buffer(make([]byte, 64*1024), 1024*1024)
 
 	var content strings.Builder
+	var reasoningContent strings.Builder
 	var inputTokens, outputTokens, cacheReadTokens, cacheWriteTokens int
 	var hasToolCalls bool
 	var toolCalls []api.ToolCall
@@ -700,7 +701,7 @@ func (p *Proxy) NonStreamResponse(w http.ResponseWriter, ccResp *http.Response, 
 		case "reasoning-start":
 			// no-op
 		case "reasoning-delta":
-			content.WriteString(event.Text)
+			reasoningContent.WriteString(event.Text)
 		case "reasoning-end":
 			// no-op
 		case "tool-use":
@@ -776,8 +777,11 @@ func (p *Proxy) NonStreamResponse(w http.ResponseWriter, ccResp *http.Response, 
 	}
 
 	msg := &api.OpenAIMessage{
-		Role:    "assistant",
-		Content: content.String(),
+		Role:             "assistant",
+		Content:          content.String(),
+	}
+	if reasoningContent.Len() > 0 {
+		msg.ReasoningContent = reasoningContent.String()
 	}
 	finishReason := "stop"
 	if hasToolCalls {
