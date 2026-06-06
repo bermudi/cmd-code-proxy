@@ -303,11 +303,9 @@ func TestHandleModels_FallbackWhenUpstreamFails(t *testing.T) {
 }
 
 func TestBuildCCRequest_Defaults(t *testing.T) {
-	temp := 0.7
 	req := api.OpenAIChatRequest{
-		Model:       "deepseek-v4-pro",
-		Messages:    []api.OpenAIMessage{{Role: "user", Content: "hi"}},
-		Temperature: &temp,
+		Model:    "deepseek-v4-pro",
+		Messages: []api.OpenAIMessage{{Role: "user", Content: "hi"}},
 	}
 
 	ccBody, err := BuildCCRequest(req)
@@ -317,14 +315,23 @@ func TestBuildCCRequest_Defaults(t *testing.T) {
 	if ccBody.Params.Model != "deepseek/deepseek-v4-pro" {
 		t.Errorf("model = %q, want %q", ccBody.Params.Model, "deepseek/deepseek-v4-pro")
 	}
-	if ccBody.Params.Temperature != 0.7 {
-		t.Errorf("temperature = %v, want 0.7", ccBody.Params.Temperature)
-	}
 	if ccBody.Params.MaxTokens != 64000 {
 		t.Errorf("maxTokens = %d, want 64000", ccBody.Params.MaxTokens)
 	}
 	if ccBody.Params.Stream != true {
 		t.Error("stream should always be true")
+	}
+	if ccBody.PermissionMode != "auto-accept" {
+		t.Errorf("permissionMode = %q, want %q", ccBody.PermissionMode, "auto-accept")
+	}
+	if ccBody.Skills != "" {
+		t.Errorf("skills = %q, want empty string", ccBody.Skills)
+	}
+	if ccBody.ThreadID != nil {
+		t.Errorf("threadId = %v, want nil", ccBody.ThreadID)
+	}
+	if !strings.Contains(ccBody.Config.Environment, "proxy") {
+		t.Errorf("environment = %q, want 'proxy' substring", ccBody.Config.Environment)
 	}
 }
 

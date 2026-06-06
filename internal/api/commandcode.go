@@ -26,13 +26,11 @@ type CCMessage struct {
 }
 
 type CCChatParams struct {
-	Model       string      `json:"model"`
-	Messages    []CCMessage `json:"messages"`
-	Tools       []any       `json:"tools"`
-	System      string      `json:"system"`
-	MaxTokens   int         `json:"max_tokens"`
-	Temperature float64     `json:"temperature"`
-	Stream      bool        `json:"stream"`
+	Model     string      `json:"model"`
+	Messages  []CCMessage `json:"messages"`
+	Tools     []any       `json:"tools"`
+	MaxTokens int         `json:"max_tokens"`
+	Stream    bool        `json:"stream"`
 }
 
 type CCConfig struct {
@@ -48,12 +46,13 @@ type CCConfig struct {
 }
 
 type CCRequestBody struct {
-	Config   CCConfig     `json:"config"`
-	Memory   any          `json:"memory"`
-	Taste    any          `json:"taste"`
-	Skills   any          `json:"skills"`
-	Params   CCChatParams `json:"params"`
-	ThreadID string       `json:"threadId"`
+	Config         CCConfig     `json:"config"`
+	Memory         any          `json:"memory"`
+	Taste          any          `json:"taste"`
+	Skills         string       `json:"skills"`
+	Params         CCChatParams `json:"params"`
+	PermissionMode string       `json:"permissionMode,omitempty"`
+	ThreadID       *string      `json:"threadId,omitempty"`
 }
 
 type CCStreamEvent struct {

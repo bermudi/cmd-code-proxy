@@ -161,8 +161,8 @@ func TestBuildRequest_UsesCLICompatibleContext(t *testing.T) {
 	if body.Config.WorkingDir != tmp {
 		t.Errorf("WorkingDir = %q, want %q", body.Config.WorkingDir, tmp)
 	}
-	if body.Config.Environment != "cli" {
-		t.Errorf("Environment = %q, want cli", body.Config.Environment)
+	if body.Config.Environment == "" {
+		t.Errorf("Environment = %q, want non-empty", body.Config.Environment)
 	}
 	if body.Config.MainBranch != "" {
 		t.Errorf("MainBranch = %q, want empty string", body.Config.MainBranch)
@@ -176,13 +176,16 @@ func TestBuildRequest_UsesCLICompatibleContext(t *testing.T) {
 	if err := json.Unmarshal(data, &raw); err != nil {
 		t.Fatalf("Unmarshal() error = %v", err)
 	}
-	for _, key := range []string{"memory", "taste", "skills"} {
+	for _, key := range []string{"memory", "taste"} {
 		if _, ok := raw[key]; !ok {
 			t.Fatalf("%s missing from request JSON: %s", key, data)
 		}
 		if raw[key] != nil {
 			t.Errorf("%s = %#v, want JSON null", key, raw[key])
 		}
+	}
+	if raw["skills"] != "" {
+		t.Errorf("skills = %#v, want empty string", raw["skills"])
 	}
 }
 
@@ -228,7 +231,10 @@ func TestCreateUpstreamRequest_SetsCLIHeaders(t *testing.T) {
 	if err := json.Unmarshal(reqBody, &raw); err != nil {
 		t.Fatalf("Unmarshal(request body) error = %v", err)
 	}
-	if raw["memory"] != nil || raw["taste"] != nil || raw["skills"] != nil {
-		t.Errorf("memory/taste/skills = %#v/%#v/%#v, want null/null/null", raw["memory"], raw["taste"], raw["skills"])
+	if raw["memory"] != nil || raw["taste"] != nil {
+		t.Errorf("memory/taste = %#v/%#v, want null/null", raw["memory"], raw["taste"])
+	}
+	if raw["skills"] != "" {
+		t.Errorf("skills = %#v, want empty string", raw["skills"])
 	}
 }

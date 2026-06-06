@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"runtime"
 	"strings"
 	"time"
 
@@ -153,15 +154,10 @@ func logger(next http.HandlerFunc) http.HandlerFunc {
 // BuildCCRequest builds the CommandCode request body (pure data transform).
 func BuildCCRequest(openAIReq api.OpenAIChatRequest) (api.CCRequestBody, error) {
 	model := MapModel(openAIReq.Model)
-	system, msgs := ExtractSystem(openAIReq.Messages)
-	ccMessages := ConvertMessages(msgs)
+	ccMessages := ConvertMessages(openAIReq.Messages)
 	workingDir := currentWorkingDir()
 
-	temperature := 0.3
 	maxTokens := 64000
-	if openAIReq.Temperature != nil {
-		temperature = *openAIReq.Temperature
-	}
 	if openAIReq.MaxTokens != nil {
 		maxTokens = *openAIReq.MaxTokens
 	}
@@ -175,7 +171,7 @@ func BuildCCRequest(openAIReq api.OpenAIChatRequest) (api.CCRequestBody, error) 
 		Config: api.CCConfig{
 			WorkingDir:    workingDir,
 			Date:          time.Now().Format("2006-01-02"),
-			Environment:   "cli",
+			Environment:   fmt.Sprintf("%s-%s, Go proxy", runtime.GOOS, runtime.GOARCH),
 			Structure:     []string{},
 			IsGitRepo:     false,
 			CurrentBranch: "",
@@ -183,19 +179,17 @@ func BuildCCRequest(openAIReq api.OpenAIChatRequest) (api.CCRequestBody, error) 
 			GitStatus:     "",
 			RecentCommits: []string{},
 		},
-		Memory: nil,
-		Taste:  nil,
-		Skills: nil,
+		Memory:         nil,
+		Taste:          nil,
+		Skills:         "",
+		PermissionMode: "auto-accept",
 		Params: api.CCChatParams{
-			Model:       model,
-			Messages:    ccMessages,
-			Tools:       tools,
-			System:      system,
-			MaxTokens:   maxTokens,
-			Temperature: temperature,
-			Stream:      true,
+			Model:     model,
+			Messages:  ccMessages,
+			Tools:     tools,
+			MaxTokens: maxTokens,
+			Stream:    true,
 		},
-		ThreadID: uuid.New().String(),
 	}
 
 	return ccBody, nil
