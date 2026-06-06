@@ -38,6 +38,38 @@ CommandCode uses Anthropic-style content-parts (`[{type:"text",...},{type:"tool-
 - The response side exposes `reasoning_content` on both `Message` and `Delta`. This is *de facto* standard among reasoning-model gateways (DeepSeek, Qwen, Anthropic-protocol bridges) and is what the upstream `command-code` binary does. Strict OpenAI SDKs ignore the field; reasoning-aware clients consume it directly.
 - Finish reason policy is unified: whatever upstream said (normalized to `stop` / `length` / `tool_calls` / `content_filter`) is what the client gets. The pre-refactor non-streaming path hard-coded `stop` or `tool_calls` and dropped upstream's real reason — that was a bug, the new code fixes it.
 
+## Process — how to change the response side
+
+The response side is the hard contract of this proxy (see [Goals](#goals) above). Changes to `internal/proxy/assembler.go` and `internal/proxy/translator.go` are how CommandCode's protocol becomes OpenAI's, and they will silently regress if treated casually. The parity test in `internal/proxy/paritytest/` is the safety net. These rules exist because "all unit tests pass" was once used to declare this proxy done, and it missed a real wire-format bug (`finish_reason: length` was being silently downgraded to `stop`).
+
+### The rules
+
+1. **The parity test is the proof of behavior preservation on the response side, not the unit tests.** Per-event unit tests in `assembler_test.go` verify the contract; the parity test in `paritytest/` verifies the wire format against a vendored copy of the pre-refactor dispatcher. If only the unit tests pass, the change is suspect.
+2. **When CommandCode adds a new event type, add a new parity fixture *first*.** Add an `EventType` constant, decoder case, and `handle` case in the assembler; add a fixture that exercises it; run the parity test; then merge. The fixture name documents what changed. No "we'll add the test later."
+3. **When the parity test reports a diff, classify it before merging.** Either:
+   - The diff is an unintentional regression — fix the code, do not modify the fixture.
+   - The diff is an intentional improvement (e.g. fixing a wire-format bug, omitting a degenerate field) — add the changed path to the fixture's `expected` map with a `valueIs(...)` / `valueAbsent()` / `valuePresent()` constraint that names the new value, and a comment explaining why.
+   - The diff is unclear — stop and ask, do not paper over it.
+4. **Never edit the vendored old code in `paritytest/` to "make the test pass."** That code is the baseline. If the test can't be made to pass against the baseline, the new code is wrong, not the baseline.
+5. **Periodically verify the test catches regressions.** Deliberately introduce a known wrong behavior in the assembler (e.g. emit `finish_reason: "WRONG"`, or reverse the args concatenation), run the parity test, confirm it fails with a useful message, then revert. A safety net that doesn't fire is worse than no safety net because it gives false confidence. Do this whenever the test infrastructure changes.
+
+### A worked example
+
+Adding a hypothetical `EventRefusalDelta` event (upstream signals a content refusal mid-stream):
+
+1. Add `EventRefusalDelta EventType` to `translator.go`, decode it from `raw.Refusal`.
+2. Add the case to `assembler.go`'s `handle` switch, dispatching to a new `onRefusalDelta(text)` strategy method.
+3. Add a parity fixture in `paritytest/` named `refusal_delta` with the new NDJSON shape and an `expected` map that says the response should carry the refusal in `choices[0].delta.refusal` (or wherever the spec lands it).
+4. Run `go test ./...`. The new fixture must pass; existing fixtures must be unchanged.
+5. If an existing fixture's diff is unintentional, fix the assembler. If a new fixture fails because the expected value is wrong, fix the fixture's value to match the real OpenAI spec — not the assembler's current output.
+
+### Anti-patterns
+
+- Adding code to the assembler, running only `assembler_test.go`, and declaring the change done.
+- Marking a parity test failure as "known issue" and merging anyway.
+- Extending `fallbackModels` (or any hand-maintained list) without a corresponding fixture showing the new model round-trips.
+- "I read the code and it looks right" as a substitute for measurement.
+
 ## Workflow
 ```sh
 go build -o bin/command-code-proxy .
@@ -61,7 +93,7 @@ The following OpenAI request fields are parsed and forwarded:
 | Field | Status |
 | --- | --- |
 | `model` | ✓ mapped via alias table, forwarded |
-| `messages` | ✓ converted via `ConvertMessages` (system hoisted, tool_calls/tooll_result content parts, image URLs, thinking/reasoning) |
+| `messages` | ✓ converted via `ConvertMessages` (system hoisted, tool_calls/tool_result content parts, image URLs, thinking/reasoning) |
 | `tools` | ✓ converted via `ConvertTools` (function schema → CommandCode input_schema) |
 | `temperature` | ✓ forwarded |
 | `max_tokens` / `max_completion_tokens` | ✓ forwarded |
@@ -89,16 +121,28 @@ What this proxy should always do well:
 
 ## Nice-to-haves
 
-Improvements that are *not* part of the current goals but would be reasonable next steps. Listed in rough order of effort/payoff.
+Improvements that are *not* part of the current goals but would be reasonable next steps. Roughly ordered by payoff-per-effort, with the personal-use bias in mind — speculative features are pushed down, reliability and debuggability are pulled up.
 
-1. **Forward more OpenAI request fields.** `tool_choice`, `parallel_tool_calls`, `response_format`, `stop`, `top_p` — implement CommandCode-side equivalents for each and add parity coverage.
-2. **Surface upstream streaming errors to the client.** The assembler currently logs `EventError` and continues; clients should get an OpenAI-shaped error chunk + `[DONE]` instead of a clean finish.
-3. **Dynamic `/v1/models` from upstream.** Replace the hand-curated `fallbackModels` with a fetch-on-startup or fetch-on-first-request approach.
-4. **Real upstream parity.** Capture an actual CommandCode NDJSON stream (or several) and add it as a fixture file. The current parity fixtures are hand-written; real upstream data is a stronger signal.
-5. **`-working-dir` flag.** The proxy uses process cwd for `config.workingDir` / `x-project-slug`. A service-mode user has no good way to override this.
-6. **Fuller `/v1/responses` endpoint.** `truncation`, `metadata`, `previous_response_id`, `store`, `user` are dropped at the shim layer.
-7. **Request-body fidelity parity test.** There's no parity coverage for the request side. The current request-side tests are per-feature unit tests, not byte-equivalence against an old baseline.
-8. **A documented public-package layout.** Today the proxy package internals are exposed to `paritytest` for convenience. If the proxy is ever imported by another module, the API surface will need a proper boundary.
+### Near term (next 1–2 sessions)
+
+1. **Real upstream parity fixtures.** Capture 2–3 real NDJSON streams from the live `command-code` binary (one short text, one with tool calls, one with reasoning) and add them as fixtures in `paritytest/`. Half a session. The current 17 fixtures are hand-written and prove the new code matches the old code; they do not prove the proxy matches real upstream behavior.
+2. **Request ID end-to-end.** Generate or honor a `X-Request-Id` on inbound, thread it through `BuildCCRequest` → upstream → assembler → log lines. 2–3 hours. Prerequisite for every future debugging session. The OpenAI `client_request_id` field can be reused.
+3. **Surface upstream streaming errors to the client.** The assembler currently logs `EventError` and continues; clients should get an OpenAI-shaped error chunk + `[DONE]` + a recognizable `finish_reason` instead of a clean finish. ~1 hour. Prevents the "client hangs in tool loop" failure mode.
+4. **`-working-dir` flag.** One CLI flag, one if-statement in `BuildCCRequest`. 15 minutes. Has been a TODO; the morning handoff notes call it out.
+
+### Medium term (next month or two)
+
+5. **Capture a regression-bait protocol change and verify the test catches it.** Intentionally add a fake new event to a fixture, verify the parity test fails with a useful diff, then revert. Half a session. Tests the test, not the proxy.
+6. **Structured logging (slog).** Slog is in stdlib. ~1 day. Prerequisite for any future observability work.
+7. **Make the personal-use boundary visible.** A comment in `main.go` listing the dropped OpenAI fields and saying "this proxy is for personal use by the maintainer; the following are intentionally not implemented." Turns a deferred TODO into a deliberate design choice. 30 minutes.
+8. **Forward more OpenAI request fields** (`tool_choice`, `parallel_tool_calls`, `response_format`, `stop`, `top_p`) — wait for a real use case. The work is small when the need is concrete; premature now.
+
+### Long term / don't bother
+
+- **Dynamic `/v1/models` from upstream.** The hand-curated list works for personal use.
+- **Full OpenAI Responses coverage.** The shim is partial by design; the chat completions endpoint is the primary surface.
+- **Public-package API boundary.** Don't bother until someone tries to import this as a library.
+- **Request-body fidelity parity test.** Useful, but only worth doing if/when a real protocol change forces the request side to evolve.
 
 ## Morning handoff notes
 - Before release, rebuild all tracked binaries together (`bin/command-code-proxy`, `bin/command-code-proxy-arm64`, `bin/command-code-proxy.exe`) or intentionally drop binary changes from the commit. Current drift is easy to miss.
