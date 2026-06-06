@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"os"
 
 	"github.com/bermudi/cmd-code-proxy/internal/proxy"
 )
@@ -21,6 +22,7 @@ func main() {
 	host := flag.String("host", "", "Host to bind to (default: 127.0.0.1)")
 	apiKey := flag.String("api-key", "", "API key for CommandCode (optional, can also be set via Authorization header)")
 	listClosed := flag.Bool("list-closed-models", false, "Include closed/premium models (Claude, GPT) in /v1/models")
+	captureDir := flag.String("capture-dir", "", "Directory to save raw upstream NDJSON streams (for debugging/fixture capture)")
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
 
@@ -41,6 +43,14 @@ func main() {
 	p := proxy.NewProxy(*apiKey, proxy.NewCCAdapter().WithDebug(debugLogging))
 	p.Debug = debugLogging
 	p.ListClosedModels = *listClosed
+
+	if *captureDir != "" {
+		if err := os.MkdirAll(*captureDir, 0o755); err != nil {
+			log.Fatalf("capture-dir: %v", err)
+		}
+		p.CaptureDir = *captureDir
+		log.Printf("Capture mode: upstream NDJSON → %s/", *captureDir)
+	}
 
 	printStartupInfo(bindHost, bindPort)
 

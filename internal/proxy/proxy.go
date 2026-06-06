@@ -42,6 +42,36 @@ func (p *Proxy) writeOpenAIError(w http.ResponseWriter, status int, message, err
 	}})
 }
 
+// teeReadCloser wraps an io.ReadCloser, teeing every Read into a WriteCloser.
+// When Close is called, both the source and the tee are closed.
+type teeReadCloser struct {
+	src io.ReadCloser
+	tee io.WriteCloser
+}
+
+func newTeeReadCloser(src io.ReadCloser, tee io.WriteCloser) *teeReadCloser {
+	return &teeReadCloser{src: src, tee: tee}
+}
+
+func (t *teeReadCloser) Read(p []byte) (int, error) {
+	n, err := t.src.Read(p)
+	if n > 0 {
+		if _, werr := t.tee.Write(p[:n]); werr != nil {
+			log.Printf("[WARN] capture: write error: %v", werr)
+		}
+	}
+	return n, err
+}
+
+func (t *teeReadCloser) Close() error {
+	srcErr := t.src.Close()
+	teeErr := t.tee.Close()
+	if srcErr != nil {
+		return srcErr
+	}
+	return teeErr
+}
+
 func currentWorkingDir() string {
 	workingDir, err := os.Getwd()
 	if err != nil || workingDir == "" {
@@ -84,6 +114,7 @@ type Proxy struct {
 	APIKey           string
 	Debug            bool
 	ListClosedModels bool
+	CaptureDir       string // if non-empty, tee upstream NDJSON to <CaptureDir>/<requestID>.ndjson
 	upstream         Upstream
 }
 
@@ -241,6 +272,15 @@ func (p *Proxy) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 
 	requestID := "chatcmpl-" + uuid.New().String()[:29]
 	created := time.Now().Unix()
+
+	// Tee upstream body to capture file if CaptureDir is set.
+	if p.CaptureDir != "" {
+		if f, err := os.CreateTemp(p.CaptureDir, requestID+"-*.ndjson"); err != nil {
+			log.Printf("[WARN] capture: failed to create file in %s: %v", p.CaptureDir, err)
+		} else {
+			respBody = newTeeReadCloser(respBody, f)
+		}
+	}
 
 	if openAIReq.Stream {
 		flusher, ok := w.(http.Flusher)

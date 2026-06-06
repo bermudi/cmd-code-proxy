@@ -313,6 +313,9 @@ func (a *ResponseAssembler) streamFinish() {
 	chunk := a.baseChunk()
 	chunk.Choices[0].Delta = &api.OpenAIDelta{}
 	chunk.Choices[0].FinishReason = &reason
+	if a.usage != nil {
+		chunk.Usage = a.usage
+	}
 	a.writeSSE(chunk)
 	fmt.Fprintf(a.w, "data: [DONE]\n\n")
 	a.flusher.Flush()

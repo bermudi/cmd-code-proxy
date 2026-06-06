@@ -7,6 +7,8 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 
@@ -396,6 +398,56 @@ func TestHandleChatCompletions_ToolCallStreaming(t *testing.T) {
 	}
 	if finishReason != "tool_calls" {
 		t.Errorf("finish = %q, want %q", finishReason, "tool_calls")
+	}
+}
+
+func TestHandleChatCompletions_CaptureDir(t *testing.T) {
+	ndjson := []string{
+		`{"type":"text-delta","text":"Hello"}`,
+		`{"type":"finish","finishReason":"stop"}`,
+	}
+
+	captureDir := t.TempDir()
+
+	p := NewProxy("key", &fakeUpstream{
+		generateFn: func(_ context.Context, _ api.CCRequestBody, _ string) (io.ReadCloser, error) {
+			return cannedNDJSON(ndjson), nil
+		},
+	})
+	p.CaptureDir = captureDir
+
+	body := `{"model":"test","messages":[{"role":"user","content":"hi"}],"stream":true}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	p.HandleChatCompletions(rec, req)
+
+	// Verify the SSE response is still correct (capture is transparent).
+	resp := rec.Result()
+	data, _ := io.ReadAll(resp.Body)
+	if !strings.Contains(string(data), "Hello") {
+		t.Errorf("response should contain Hello, got: %s", data)
+	}
+
+	// Verify the capture file was written.
+	entries, err := os.ReadDir(captureDir)
+	if err != nil {
+		t.Fatalf("ReadDir: %v", err)
+	}
+	if len(entries) != 1 {
+		t.Fatalf("expected 1 capture file, got %d", len(entries))
+	}
+
+	captured, err := os.ReadFile(filepath.Join(captureDir, entries[0].Name()))
+	if err != nil {
+		t.Fatalf("ReadFile: %v", err)
+	}
+
+	// The captured NDJSON must contain both lines exactly as the upstream sent them.
+	for _, line := range ndjson {
+		if !strings.Contains(string(captured), line) {
+			t.Errorf("capture missing line %q", line)
+		}
 	}
 }
 

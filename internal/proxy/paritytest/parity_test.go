@@ -799,9 +799,12 @@ var parityFixtures = []parityFixture{
 			`{"type":"text-delta","text":"x"}`,
 			`{"type":"finish","finishReason":"stop","totalUsage":{"inputTokens":10,"outputTokens":3,"cacheReadInputTokens":1,"cacheCreationInputTokens":2}}`,
 		}, "\n"),
-		// usage is populated identically in both, so no diff expected.
-		// Empty map: every path must match old byte-for-byte.
-		expected: map[string]constraint{},
+		// Old code dropped usage in streaming; new code emits it on the
+		// final chunk. Intentional improvement — lets clients (like Pi)
+		// report token counts.
+		expected: map[string]constraint{
+			"usage": valuePresent(),
+		},
 	},
 	{
 		name: "finish_length",
@@ -844,7 +847,7 @@ var parityFixtures = []parityFixture{
 			`{"type":"finish","finishReason":"stop","totalUsage":{"inputTokens":12,"outputTokens":7}}`,
 		}, "\n"),
 		expected: map[string]constraint{
-			"usage":         valueAbsent(),
+			"usage":         valuePresent(),
 			"finish_reason": valueIs("stop"),
 		},
 	},
@@ -863,7 +866,7 @@ var parityFixtures = []parityFixture{
 			`{"type":"finish","finishReason":"stop","totalUsage":{"inputTokens":20,"outputTokens":12}}`,
 		}, "\n"),
 		expected: map[string]constraint{
-			"usage":         valueAbsent(),
+			"usage":         valuePresent(),
 			"finish_reason": valueIs("stop"),
 		},
 	},
@@ -925,13 +928,67 @@ func TestParity_Stream(t *testing.T) {
 		t.Run(fx.name, func(t *testing.T) {
 			oldOut := normalizeStreamForParity(runOldStream(t, fx.ndjson))
 			newOut := normalizeStreamForParity(runNewStream(t, fx.ndjson))
-			if oldOut != newOut {
+			if oldOut == newOut {
+				return
+			}
+
+			// Byte-exact match failed. Parse chunks pairwise and apply
+			// the same constraint system as the final test.
+			oldChunks := parseStreamChunks(t, runOldStream(t, fx.ndjson))
+			newChunks := parseStreamChunks(t, runNewStream(t, fx.ndjson))
+
+			if len(oldChunks) != len(newChunks) {
 				oldRaw := runOldStream(t, fx.ndjson)
 				newRaw := runNewStream(t, fx.ndjson)
-				t.Errorf("stream output differs for %s\n%s", fx.name, diffBytes(fx.name, oldRaw, newRaw))
+				t.Errorf("stream output differs for %s: chunk count %d (old) vs %d (new)\n%s", fx.name, len(oldChunks), len(newChunks), diffBytes(fx.name, oldRaw, newRaw))
+				return
+			}
+
+			var unexpected []string
+			for i := range oldChunks {
+				diffs := diffJSON("", oldChunks[i], newChunks[i])
+				for _, d := range diffs {
+					oldVal, newVal := lookupPath(oldChunks[i], d), lookupPath(newChunks[i], d)
+					con, ok := lookupConstraint(d, fx.expected)
+					if !ok {
+						unexpected = append(unexpected, fmt.Sprintf("chunk[%d] %s: %v (old) -> %v (new) — no constraint declared", i, d, oldVal, newVal))
+						continue
+					}
+					if !con(newVal) {
+						unexpected = append(unexpected, fmt.Sprintf("chunk[%d] %s: new value %v fails constraint", i, d, newVal))
+					}
+				}
+			}
+			if len(unexpected) > 0 {
+				oldRaw := runOldStream(t, fx.ndjson)
+				newRaw := runNewStream(t, fx.ndjson)
+				t.Errorf("stream output differs for %s\n%s\nunexpected diffs:\n  %s", fx.name, diffBytes(fx.name, oldRaw, newRaw), strings.Join(unexpected, "\n  "))
 			}
 		})
 	}
+}
+
+// parseStreamChunks extracts and parses each data: line from SSE into a
+// map[string]any. [DONE] lines are skipped.
+func parseStreamChunks(t *testing.T, raw []byte) []map[string]any {
+	t.Helper()
+	var chunks []map[string]any
+	for _, line := range strings.Split(string(raw), "\n") {
+		line = strings.TrimSpace(line)
+		if !strings.HasPrefix(line, "data: ") {
+			continue
+		}
+		payload := strings.TrimPrefix(line, "data: ")
+		if payload == "[DONE]" {
+			continue
+		}
+		var v map[string]any
+		if err := json.Unmarshal([]byte(payload), &v); err != nil {
+			t.Fatalf("invalid chunk JSON: %s: %v", payload, err)
+		}
+		chunks = append(chunks, v)
+	}
+	return chunks
 }
 
 func TestParity_Final(t *testing.T) {
