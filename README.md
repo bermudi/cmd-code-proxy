@@ -6,7 +6,7 @@ Repository: https://github.com/bermudi/cmd-code-proxy
 
 Version: `v1.0.8`
 
-For project conventions, scope, goals, and the request-side fidelity table, see [AGENTS.md](AGENTS.md). For the time-bound development plan, see [ROADMAP.md](ROADMAP.md).
+For project conventions, scope, goals, and the request-side fidelity table, see [AGENTS.md](AGENTS.md) (the table itself lives in [MAINTAINING.md](MAINTAINING.md) for now). For the time-bound development plan, see [ROADMAP.md](ROADMAP.md).
 
 ## Features
 
@@ -233,7 +233,9 @@ Unknown model names are passed through unchanged.
 ```text
 .
 ├── README.md
-├── AGENTS.md            # goals, scope, nice-to-haves, parity-test description
+├── AGENTS.md            # goals, scope, process discipline
+├── MAINTAINING.md        # parity-test mechanics, request-fidelity table, release checklist
+├── ROADMAP.md            # time-bound development plan
 ├── go.mod
 ├── go.sum
 ├── main.go
