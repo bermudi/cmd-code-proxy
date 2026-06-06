@@ -1,6 +1,6 @@
 # CommandCode Proxy Server
 
-OpenAI-compatible proxy server for the CommandCode API. It exposes `/v1/chat/completions`, `/chat/completions`, `/v1/responses`, and `/v1/models` endpoints so OpenAI-compatible clients can call CommandCode models through a local HTTP server.
+OpenAI-compatible proxy server for the CommandCode API. Exposes `/v1/chat/completions`, `/chat/completions`, `/v1/responses`, and `/v1/models` so OpenAI-shaped clients can call CommandCode models through a local HTTP server.
 
 Repository: https://github.com/bermudi/cmd-code-proxy
 
@@ -17,6 +17,18 @@ Version: `v1.0.8`
 - Optional default API key from CLI
 - Per-request API key via `Authorization` header
 - Configurable host and port
+- Tools, tool calls, images, and thinking/reasoning content round-trip cleanly
+- `reasoning_content` exposed on both message and delta (DeepSeek/Qwen/Anthropic-protocol style)
+
+## What it is and isn't
+
+This is a personal-use adapter, not a complete OpenAI-API shape-preserving proxy.
+
+**Supported on the request side:** `model`, `messages` (including system hoisting, content parts, images, tool calls, tool results, thinking blocks), `tools`, `temperature`, `max_tokens`/`max_completion_tokens`, `stream`. Everything a Claude-Code-style client actually exercises.
+
+**Not supported on the request side:** `tool_choice`, `parallel_tool_calls`, `response_format`, `stop`, `top_p`, `presence_penalty`, `frequency_penalty`. These are accepted by the JSON parser and dropped before reaching CommandCode. If you need one, file an issue.
+
+**Response side:** byte-equivalent to this proxy's verified pre-refactor behavior for every event class covered by the parity test (17 fixtures, all event types and combinations). Streaming errors from upstream are logged but not surfaced to the client.
 
 ## Requirements
 
@@ -122,6 +134,8 @@ GET /v1/models
 
 Returns an OpenAI-compatible model list. By default, closed/premium models are filtered out; start the proxy with `-list-closed-models` to include them.
 
+The list is hand-curated (see `internal/proxy/proxy.go` — `fallbackModels`); new CommandCode models need a code update to appear.
+
 ### Chat completions
 
 ```http
@@ -161,13 +175,15 @@ curl -N http://127.0.0.1:55990/v1/chat/completions \
   }'
 ```
 
+Reasoning content, if any, is exposed in `choices[0].message.reasoning_content` (non-streaming) and in `choices[0].delta.reasoning_content` (streaming).
+
 ### Responses
 
 ```http
 POST /v1/responses
 ```
 
-Accepts a subset of OpenAI Responses API requests and rewrites them internally to chat completions. `input` can be a string or an array of role/content items; `instructions` are converted to a system message.
+Partial OpenAI Responses API shim. `input` can be a string or an array of role/content items; `instructions` is converted to a system message; `max_output_tokens` / `max_completion_tokens` are forwarded. `truncation`, `metadata`, `previous_response_id`, `store`, `user`, and the `reasoning` parameter are not supported.
 
 Example request:
 
@@ -215,6 +231,7 @@ Unknown model names are passed through unchanged.
 ```text
 .
 ├── README.md
+├── AGENTS.md            # goals, scope, nice-to-haves, parity-test description
 ├── go.mod
 ├── go.sum
 ├── main.go
@@ -223,24 +240,27 @@ Unknown model names are passed through unchanged.
     │   ├── commandcode.go
     │   └── openai.go
     ├── proxy
-    │   ├── convert.go
+    │   ├── assembler.go         # response-side dispatcher (stream + non-stream)
+    │   ├── assembler_test.go    # per-event-class unit tests
+    │   ├── convert.go           # OpenAI ↔ CommandCode message/tool format
     │   ├── convert_test.go
     │   ├── model.go
     │   ├── model_test.go
-    │   ├── proxy.go
-    │   └── proxy_test.go
-    ├── server
-    │   └── server.go
+    │   ├── proxy.go             # HTTP routes, request handling
+    │   ├── translator.go        # NDJSON event decoder
+    │   ├── handler_test.go      # end-to-end HTTP tests
+    │   └── paritytest/          # vendored pre-refactor code + parity harness
     └── version
         └── version.go
 ```
 
 ## How it works
 
-1. Client sends an OpenAI-compatible request to the local proxy.
+1. Client sends an OpenAI-shaped request to the local proxy.
 2. The proxy extracts system messages, maps the model name, and converts messages to CommandCode format.
 3. The proxy sends the request to `https://api.commandcode.ai/alpha/generate`.
-4. CommandCode streaming NDJSON events are converted back to OpenAI-compatible SSE chunks or collected into a single JSON response.
+4. CommandCode streaming NDJSON events are converted back to OpenAI-shaped SSE chunks or collected into a single JSON response.
+5. The response side has a parity test (in `internal/proxy/paritytest/`) that pins the wire format byte-for-byte against a vendored copy of the pre-refactor dispatcher, so any future change to streaming or finish-reason semantics must either match the old behavior or be explicitly classified as an intentional improvement.
 
 Every upstream request is sent with `stream: true`. For non-streaming clients, the proxy buffers the NDJSON stream and assembles the final JSON response.
 
@@ -256,7 +276,7 @@ The upstream request includes CLI-compatible context fields and headers:
 - `x-taste-learning: true`
 - `x-co-flag: false`
 
-If you run the proxy as a long-lived service, start it from the project directory you want CommandCode to see.
+If you run the proxy as a long-lived service, start it from the project directory you want CommandCode to see. There is no `-working-dir` flag yet.
 
 ## CommandCode version header
 
