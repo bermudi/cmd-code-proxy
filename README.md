@@ -6,6 +6,8 @@ Repository: https://github.com/bermudi/cmd-code-proxy
 
 Version: `v1.0.8`
 
+For project conventions, scope, goals, and the request-side fidelity table, see [AGENTS.md](AGENTS.md). For the time-bound development plan, see [ROADMAP.md](ROADMAP.md).
+
 ## Features
 
 - OpenAI-compatible chat completions endpoint and alias

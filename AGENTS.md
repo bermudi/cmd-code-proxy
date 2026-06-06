@@ -121,34 +121,34 @@ What this proxy should always do well:
 
 ## Nice-to-haves
 
-Improvements that are *not* part of the current goals but would be reasonable next steps. Roughly ordered by payoff-per-effort, with the personal-use bias in mind — speculative features are pushed down, reliability and debuggability are pulled up.
+A catalog of improvements that are *not* part of the current goals. The time-bound plan that picks which of these to do, in what order, lives in [ROADMAP.md](ROADMAP.md). The morning handoff notes at the bottom of this file list release-time TODOs separately.
 
-### Near term (next 1–2 sessions)
+### Reliability and debuggability
 
-1. **Real upstream parity fixtures.** Capture 2–3 real NDJSON streams from the live `command-code` binary (one short text, one with tool calls, one with reasoning) and add them as fixtures in `paritytest/`. Half a session. The current 17 fixtures are hand-written and prove the new code matches the old code; they do not prove the proxy matches real upstream behavior.
-2. **Request ID end-to-end.** Generate or honor a `X-Request-Id` on inbound, thread it through `BuildCCRequest` → upstream → assembler → log lines. 2–3 hours. Prerequisite for every future debugging session. The OpenAI `client_request_id` field can be reused.
-3. **Surface upstream streaming errors to the client.** The assembler currently logs `EventError` and continues; clients should get an OpenAI-shaped error chunk + `[DONE]` + a recognizable `finish_reason` instead of a clean finish. ~1 hour. Prevents the "client hangs in tool loop" failure mode.
-4. **`-working-dir` flag.** One CLI flag, one if-statement in `BuildCCRequest`. 15 minutes. Has been a TODO; the morning handoff notes call it out.
+- **Real upstream parity fixtures.** Capture 2–3 real NDJSON streams from the live `command-code` binary and add them as fixtures in `paritytest/`. Hand-written fixtures prove the new code matches the old code; real fixtures prove the proxy matches real upstream.
+- **Request ID end-to-end.** Thread a `X-Request-Id` (or honor an inbound one) from the client through the upstream call and back into log lines. Prerequisite for every future debugging session.
+- **Surface upstream streaming errors to the client.** The assembler logs `EventError` and continues; clients should get a final error chunk + `[DONE]` instead of a clean finish.
+- **`-working-dir` flag.** The proxy uses process cwd for `config.workingDir` / `x-project-slug`. A service-mode user has no good way to override this.
+- **Structured logging (slog).** Replace `log.Printf` with `slog` and a JSON-handler switch. Prerequisite for any meaningful observability work.
+- **Capture a regression-bait protocol change and verify the test catches it.** Tests the test, not the proxy. Document the result so future maintainers know the safety net was last verified.
 
-### Medium term (next month or two)
+### Feature gaps (deferred until a real need)
 
-5. **Capture a regression-bait protocol change and verify the test catches it.** Intentionally add a fake new event to a fixture, verify the parity test fails with a useful diff, then revert. Half a session. Tests the test, not the proxy.
-6. **Structured logging (slog).** Slog is in stdlib. ~1 day. Prerequisite for any future observability work.
-7. **Make the personal-use boundary visible.** A comment in `main.go` listing the dropped OpenAI fields and saying "this proxy is for personal use by the maintainer; the following are intentionally not implemented." Turns a deferred TODO into a deliberate design choice. 30 minutes.
-8. **Forward more OpenAI request fields** (`tool_choice`, `parallel_tool_calls`, `response_format`, `stop`, `top_p`) — wait for a real use case. The work is small when the need is concrete; premature now.
+- **Forward more OpenAI request fields** (`tool_choice`, `parallel_tool_calls`, `response_format`, `stop`, `top_p`). Implement CommandCode-side equivalents when a real request needs each one; speculative now.
+- **Fuller `/v1/responses` endpoint.** `truncation`, `metadata`, `previous_response_id`, `store`, `user`, the `reasoning` parameter. The shim is partial by design; the chat completions endpoint is the primary surface.
+- **Dynamic `/v1/models` from upstream.** Replace the hand-curated `fallbackModels` with a fetch-on-startup approach. Worth doing only if multiple users / a containerized deployment materializes.
+- **Request-body fidelity parity test.** Same discipline as the response-side parity test, applied to the request side. Worth doing only if the request side starts evolving.
 
-### Long term / don't bother
+### Project hygiene
 
-- **Dynamic `/v1/models` from upstream.** The hand-curated list works for personal use.
-- **Full OpenAI Responses coverage.** The shim is partial by design; the chat completions endpoint is the primary surface.
-- **Public-package API boundary.** Don't bother until someone tries to import this as a library.
-- **Request-body fidelity parity test.** Useful, but only worth doing if/when a real protocol change forces the request side to evolve.
+- **Make the personal-use boundary visible.** A comment in `main.go` listing the dropped OpenAI fields and stating "this proxy is for personal use by the maintainer; the following are intentionally not implemented." Turns a deferred TODO into a deliberate design choice.
+- **Documented public-package layout.** Today the proxy package internals are exposed to `paritytest` for convenience. If the proxy is ever imported by another module, the API surface will need a proper boundary.
 
 ## Morning handoff notes
 - Before release, rebuild all tracked binaries together (`bin/command-code-proxy`, `bin/command-code-proxy-arm64`, `bin/command-code-proxy.exe`) or intentionally drop binary changes from the commit. Current drift is easy to miss.
 - If cutting a release, bump `appVersion` in `main.go`, update README's version string, tag the commit, and make sure the binaries are built from the clean tagged tree.
-- Decide whether process cwd is acceptable for `config.workingDir`/`x-project-slug`. If users run this as a service, add a `-working-dir` flag or another explicit override instead of silently using the service directory.
-- After those fixes, run `go test ./...`, `go vet ./...`, and smoke `/health` plus `/v1/models` against the built binary.
+- After release prep, run `go test ./...`, `go vet ./...`, and smoke `/health` plus `/v1/models` against the built binary.
+- The `-working-dir` flag (a development item) lives in [ROADMAP.md](ROADMAP.md) § Phase 1.4. It is not a release blocker; cut the release from a tag, then ship the flag in a follow-up commit.
 
 ## Constraints
 - Default binds to localhost only — do not expose to network without auth
