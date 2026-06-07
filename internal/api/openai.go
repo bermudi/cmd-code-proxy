@@ -43,40 +43,42 @@ type MessageAudio struct {
 }
 
 type OpenAIChatRequest struct {
-	Model               string          `json:"model"`
-	Messages            []OpenAIMessage `json:"messages"`
-	Temperature         *float64        `json:"temperature,omitempty"`
-	MaxTokens           *int            `json:"max_tokens,omitempty"`
-	MaxCompletionTokens *int            `json:"max_completion_tokens,omitempty"`
-	Stream              bool            `json:"stream,omitempty"`
-	StreamOptions       any             `json:"stream_options,omitempty"`
-	Tools               []any           `json:"tools,omitempty"`
-	ToolChoice          any             `json:"tool_choice,omitempty"`
-	ParallelToolCalls   *bool           `json:"parallel_tool_calls,omitempty"`
-	ResponseFormat      any             `json:"response_format,omitempty"`
-	Stop                any             `json:"stop,omitempty"`
-	TopP                *float64        `json:"top_p,omitempty"`
-	PresencePenalty     *float64        `json:"presence_penalty,omitempty"`
-	FrequencyPenalty    *float64        `json:"frequency_penalty,omitempty"`
-	User                string          `json:"user,omitempty"`
+	Model                    string          `json:"model"`
+	Messages                 []OpenAIMessage `json:"messages"`
+	Temperature              *float64        `json:"temperature,omitempty"`
+	MaxTokens                *int            `json:"max_tokens,omitempty"`
+	MaxCompletionTokens      *int            `json:"max_completion_tokens,omitempty"`
+	Stream                   bool            `json:"stream,omitempty"`
+	StreamOptions            any             `json:"stream_options,omitempty"`
+	Tools                    []any           `json:"tools,omitempty"`
+	ToolChoice               any             `json:"tool_choice,omitempty"`
+	ParallelToolCalls        *bool           `json:"parallel_tool_calls,omitempty"`
+	ResponseFormat           any             `json:"response_format,omitempty"`
+	Stop                     any             `json:"stop,omitempty"`
+	TopP                     *float64        `json:"top_p,omitempty"`
+	PresencePenalty           *float64        `json:"presence_penalty,omitempty"`
+	FrequencyPenalty          *float64        `json:"frequency_penalty,omitempty"`
+	User                     string          `json:"user,omitempty"`
+	XCommandCodeWorkingDir   string          `json:"x_command_code_working_dir,omitempty"`
 }
 
 type OpenAIResponsesRequest struct {
-	Model               string   `json:"model"`
-	Input               any      `json:"input"`
-	Instructions        any      `json:"instructions,omitempty"`
-	Temperature         *float64 `json:"temperature,omitempty"`
-	MaxOutputTokens     *int     `json:"max_output_tokens,omitempty"`
-	MaxTokens           *int     `json:"max_tokens,omitempty"`
-	MaxCompletionTokens *int     `json:"max_completion_tokens,omitempty"`
-	Stream              bool     `json:"stream,omitempty"`
-	Tools               []any    `json:"tools,omitempty"`
-	ToolChoice          any      `json:"tool_choice,omitempty"`
-	ParallelToolCalls   *bool    `json:"parallel_tool_calls,omitempty"`
-	ResponseFormat      any      `json:"response_format,omitempty"`
-	Stop                any      `json:"stop,omitempty"`
-	TopP                *float64 `json:"top_p,omitempty"`
-	User                string   `json:"user,omitempty"`
+	Model                    string   `json:"model"`
+	Input                    any      `json:"input"`
+	Instructions             any      `json:"instructions,omitempty"`
+	Temperature              *float64 `json:"temperature,omitempty"`
+	MaxOutputTokens          *int     `json:"max_output_tokens,omitempty"`
+	MaxTokens                *int     `json:"max_tokens,omitempty"`
+	MaxCompletionTokens      *int     `json:"max_completion_tokens,omitempty"`
+	Stream                   bool     `json:"stream,omitempty"`
+	Tools                    []any    `json:"tools,omitempty"`
+	ToolChoice               any      `json:"tool_choice,omitempty"`
+	ParallelToolCalls        *bool    `json:"parallel_tool_calls,omitempty"`
+	ResponseFormat           any      `json:"response_format,omitempty"`
+	Stop                     any      `json:"stop,omitempty"`
+	TopP                     *float64 `json:"top_p,omitempty"`
+	User                     string   `json:"user,omitempty"`
+	XCommandCodeWorkingDir   string   `json:"x_command_code_working_dir,omitempty"`
 }
 
 type OpenAIChoice struct {

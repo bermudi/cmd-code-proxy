@@ -60,6 +60,7 @@ go run main.go [options]
 | `-port` | `55990` | Port to run the server on |
 | `-api-key` | empty | Optional default CommandCode API key |
 | `-list-closed-models` | `false` | Include closed/premium models, such as Claude and GPT, in `/v1/models` |
+| `-working-dir` | proxy process working directory | Working directory/project context to send to CommandCode |
 | `-version` | `false` | Print version and exit |
 
 Examples:
@@ -272,7 +273,7 @@ Every upstream request is sent with `stream: true`. For non-streaming clients, t
 
 The upstream request includes CLI-compatible context fields and headers:
 
-- `config.workingDir` is the proxy process working directory.
+- `config.workingDir` is the proxy process working directory, unless overridden with `-working-dir`.
 - `config.environment` is `cli`.
 - `memory`, `taste`, and `skills` are sent as JSON `null`.
 - `x-cli-environment: production`
@@ -280,7 +281,7 @@ The upstream request includes CLI-compatible context fields and headers:
 - `x-taste-learning: true`
 - `x-co-flag: false`
 
-If you run the proxy as a long-lived service, start it from the project directory you want CommandCode to see. There is no `-working-dir` flag yet.
+If you run the proxy as a long-lived service, pass `-working-dir /path/to/project` for the project directory you want CommandCode to see.
 
 ## CommandCode version header
 

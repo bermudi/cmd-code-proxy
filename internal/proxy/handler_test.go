@@ -200,6 +200,30 @@ func TestHandleChatCompletions_ClientAPIKeyOverridesDefault(t *testing.T) {
 	}
 }
 
+func TestHandleChatCompletions_UsesProxyWorkingDirOverride(t *testing.T) {
+	ndjson := []string{`{"type":"text-delta","text":"ok"}`, `{"type":"finish","finishReason":"stop"}`}
+	override := "/home/daniel/Documents/AgenticWiki"
+
+	var capturedBody api.CCRequestBody
+	p := NewProxy("test-key", &fakeUpstream{
+		generateFn: func(_ context.Context, body api.CCRequestBody, _ string) (io.ReadCloser, error) {
+			capturedBody = body
+			return cannedNDJSON(ndjson), nil
+		},
+	})
+	p.WorkingDir = override
+
+	body := `{"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":true}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	p.HandleChatCompletions(rec, req)
+
+	if capturedBody.Config.WorkingDir != override {
+		t.Errorf("WorkingDir = %q, want %q", capturedBody.Config.WorkingDir, override)
+	}
+}
+
 func TestHandleChatCompletions_MethodNotAllowed(t *testing.T) {
 	p := NewProxy("key", &fakeUpstream{})
 	req := httptest.NewRequest("GET", "/v1/chat/completions", nil)

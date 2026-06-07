@@ -116,6 +116,7 @@ type Proxy struct {
 	Debug            bool
 	ListClosedModels bool
 	CaptureDir       string // if non-empty, tee upstream NDJSON to <CaptureDir>/<requestID>.ndjson
+	WorkingDir       string // if non-empty, overrides the process working directory sent to CommandCode
 	upstream         Upstream
 }
 
@@ -153,9 +154,18 @@ func logger(next http.HandlerFunc) http.HandlerFunc {
 
 // BuildCCRequest builds the CommandCode request body (pure data transform).
 func BuildCCRequest(openAIReq api.OpenAIChatRequest) (api.CCRequestBody, error) {
+	return BuildCCRequestWithWorkingDir(openAIReq, "")
+}
+
+// BuildCCRequestWithWorkingDir builds the CommandCode request body and allows
+// callers to override the CLI-compatible working directory sent upstream.
+func BuildCCRequestWithWorkingDir(openAIReq api.OpenAIChatRequest, workingDirOverride string) (api.CCRequestBody, error) {
 	model := MapModel(openAIReq.Model)
 	ccMessages := ConvertMessages(openAIReq.Messages)
 	workingDir := currentWorkingDir()
+	if workingDirOverride != "" {
+		workingDir = workingDirOverride
+	}
 
 	maxTokens := 64000
 	if openAIReq.MaxTokens != nil {
@@ -234,8 +244,14 @@ func (p *Proxy) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Determine working directory: per-request field > flag > process cwd
+	workingDir := openAIReq.XCommandCodeWorkingDir
+	if workingDir == "" {
+		workingDir = p.WorkingDir
+	}
+
 	// Build CommandCode request
-	ccBody, err := BuildCCRequest(openAIReq)
+	ccBody, err := BuildCCRequestWithWorkingDir(openAIReq, workingDir)
 	if err != nil {
 		p.writeOpenAIError(w, http.StatusInternalServerError, "Failed to build request", "server_error")
 		return
@@ -341,19 +357,20 @@ func responsesToChatRequest(req api.OpenAIResponsesRequest) api.OpenAIChatReques
 	}
 
 	return api.OpenAIChatRequest{
-		Model:               req.Model,
-		Messages:            messages,
-		Temperature:         req.Temperature,
-		MaxTokens:           req.MaxTokens,
-		MaxCompletionTokens: maxTokens,
-		Stream:              req.Stream,
-		Tools:               req.Tools,
-		ToolChoice:          req.ToolChoice,
-		ParallelToolCalls:   req.ParallelToolCalls,
-		ResponseFormat:      req.ResponseFormat,
-		Stop:                req.Stop,
-		TopP:                req.TopP,
-		User:                req.User,
+		Model:                    req.Model,
+		Messages:                 messages,
+		Temperature:              req.Temperature,
+		MaxTokens:                req.MaxTokens,
+		MaxCompletionTokens:      maxTokens,
+		Stream:                   req.Stream,
+		Tools:                    req.Tools,
+		ToolChoice:               req.ToolChoice,
+		ParallelToolCalls:        req.ParallelToolCalls,
+		ResponseFormat:           req.ResponseFormat,
+		Stop:                     req.Stop,
+		TopP:                     req.TopP,
+		User:                     req.User,
+		XCommandCodeWorkingDir:   req.XCommandCodeWorkingDir,
 	}
 }
 

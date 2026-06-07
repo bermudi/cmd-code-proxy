@@ -41,7 +41,7 @@ The goal of this phase is to make the proxy's behavior *measurable* and *debugga
 - **Success criteria:** A new parity fixture (`upstream_stream_error`) proves the client receives an error chunk + `[DONE]` and no further chunks. `assembler_test.go` covers the non-streaming path.
 - **Depends on:** the new event handling in the assembler already has a place for this — just a new case in `handle()`.
 
-### 1.4 `-working-dir` flag
+### 1.4 `-working-dir` flag ✅
 
 - **What:** Add a CLI flag that overrides `config.workingDir` and `x-project-slug` in the upstream request body.
 - **Why:** The morning handoff notes call this out as a TODO. Anyone running the proxy as a service (systemd, Docker, supervisord) has no good way to set these without running from a specific directory, which is fragile.

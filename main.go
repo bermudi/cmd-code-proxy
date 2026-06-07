@@ -23,6 +23,7 @@ func main() {
 	apiKey := flag.String("api-key", "", "API key for CommandCode (optional, can also be set via Authorization header)")
 	listClosed := flag.Bool("list-closed-models", false, "Include closed/premium models (Claude, GPT) in /v1/models")
 	captureDir := flag.String("capture-dir", "", "Directory to save raw upstream NDJSON streams (for debugging/fixture capture)")
+	workingDir := flag.String("working-dir", "", "Working directory/project context to send to CommandCode (default: proxy process working directory)")
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	flag.Parse()
 
@@ -43,6 +44,7 @@ func main() {
 	p := proxy.NewProxy(*apiKey, proxy.NewCCAdapter().WithDebug(debugLogging))
 	p.Debug = debugLogging
 	p.ListClosedModels = *listClosed
+	p.WorkingDir = *workingDir
 
 	if *captureDir != "" {
 		if err := os.MkdirAll(*captureDir, 0o755); err != nil {

@@ -189,6 +189,26 @@ func TestBuildRequest_UsesCLICompatibleContext(t *testing.T) {
 	}
 }
 
+func TestBuildRequest_UsesWorkingDirOverride(t *testing.T) {
+	tmp := t.TempDir()
+	override := "/home/daniel/Documents/AgenticWiki"
+	t.Chdir(tmp)
+
+	body, err := BuildCCRequestWithWorkingDir(api.OpenAIChatRequest{
+		Model: "deepseek-v4-flash",
+		Messages: []api.OpenAIMessage{
+			{Role: "user", Content: "hello"},
+		},
+	}, override)
+	if err != nil {
+		t.Fatalf("BuildRequest() error = %v", err)
+	}
+
+	if body.Config.WorkingDir != override {
+		t.Errorf("WorkingDir = %q, want %q", body.Config.WorkingDir, override)
+	}
+}
+
 func TestCreateUpstreamRequest_SetsCLIHeaders(t *testing.T) {
 	tmp := t.TempDir()
 	t.Chdir(tmp)
