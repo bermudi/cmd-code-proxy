@@ -288,16 +288,41 @@ func TestFinalAssembler_OrphanToolInputDeltaIsDropped(t *testing.T) {
 func TestFinalAssembler_UsagePopulated(t *testing.T) {
 	r := feedFinal(t, []string{
 		`{"type":"text-delta","text":"x"}`,
-		`{"type":"finish","finishReason":"stop","totalUsage":{"inputTokens":4,"outputTokens":2,"cacheReadInputTokens":1}}`,
+		`{"type":"finish","finishReason":"stop","totalUsage":{"inputTokens":4,"outputTokens":2,"cachedInputTokens":1}}`,
 	})
 	if r.Usage == nil {
 		t.Fatal("Usage is nil")
 	}
-	if r.Usage.PromptTokens != 4 || r.Usage.CompletionTokens != 2 || r.Usage.TotalTokens != 6 {
-		t.Errorf("Usage = %+v, want prompt=4 completion=2 total=6", r.Usage)
+	if r.Usage.PromptTokens != 3 || r.Usage.CompletionTokens != 2 || r.Usage.TotalTokens != 6 {
+		t.Errorf("Usage = %+v, want prompt=3 completion=2 total=6", r.Usage)
 	}
 	if r.Usage.CacheReadTokens != 1 {
 		t.Errorf("CacheReadTokens = %d, want 1", r.Usage.CacheReadTokens)
+	}
+}
+
+func TestFinalAssembler_UsageDisjoint(t *testing.T) {
+	// Upstream inputTokens=5320 includes 5234 cached. OpenAI convention: prompt_tokens
+	// should be the non-cached portion (86), cache_read_tokens reported separately.
+	r := feedFinal(t, []string{
+		`{"type":"text-delta","text":"x"}`,
+		`{"type":"finish","finishReason":"stop","totalUsage":{"inputTokens":5320,"outputTokens":42,"cachedInputTokens":5234}}`,
+	})
+	if r.Usage == nil {
+		t.Fatal("Usage is nil")
+	}
+	if r.Usage.PromptTokens != 86 {
+		t.Errorf("PromptTokens = %d, want 86 (5320 - 5234)", r.Usage.PromptTokens)
+	}
+	if r.Usage.CompletionTokens != 42 {
+		t.Errorf("CompletionTokens = %d, want 42", r.Usage.CompletionTokens)
+	}
+	if r.Usage.CacheReadTokens != 5234 {
+		t.Errorf("CacheReadTokens = %d, want 5234", r.Usage.CacheReadTokens)
+	}
+	expectedTotal := 86 + 42 + 5234 // disjoint sum
+	if r.Usage.TotalTokens != expectedTotal {
+		t.Errorf("TotalTokens = %d, want %d", r.Usage.TotalTokens, expectedTotal)
 	}
 }
 

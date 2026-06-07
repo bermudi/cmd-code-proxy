@@ -431,10 +431,17 @@ func normalizeFinishReason(reason string) string {
 // usageFromEvent converts the translator's per-event usage view into the
 // OpenAI wire shape, omitting cache fields when zero.
 func usageFromEvent(u *EventUsage) *api.OpenAIUsage {
+	// Upstream inputTokens is the TOTAL (cached + uncached), following the
+	// Vercel AI SDK convention. OpenAI's convention is disjoint: prompt_tokens
+	// excludes cached tokens, which are reported separately. Subtract to match.
+	promptTokens := u.InputTokens - u.CacheReadInputTokens - u.CacheCreationInputTokens
+	if promptTokens < 0 {
+		promptTokens = 0
+	}
 	usage := &api.OpenAIUsage{
-		PromptTokens:     u.InputTokens,
+		PromptTokens:     promptTokens,
 		CompletionTokens: u.OutputTokens,
-		TotalTokens:      u.InputTokens + u.OutputTokens,
+		TotalTokens:      promptTokens + u.OutputTokens + u.CacheReadInputTokens + u.CacheCreationInputTokens,
 	}
 	if u.CacheReadInputTokens > 0 {
 		usage.CacheReadTokens = u.CacheReadInputTokens

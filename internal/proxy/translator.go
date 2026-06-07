@@ -70,9 +70,10 @@ type StreamError struct {
 
 // EventTranslator scans a CommandCode NDJSON stream and yields typed Events.
 type EventTranslator struct {
-	scanner *bufio.Scanner
-	event   Event
-	err     error
+	scanner     *bufio.Scanner
+	event       Event
+	err         error
+	finishSeen  bool // suppress duplicate finish events
 }
 
 // NewEventTranslator creates a translator that reads NDJSON events from r.
@@ -130,10 +131,20 @@ func (t *EventTranslator) Next() bool {
 			t.event.ToolCallID = raw.ToolCallID
 			t.event.ToolName = raw.ToolName
 			t.event.Input = raw.Input
-		case "finish":
+		case "finish-step", "finish":
 			t.event.Type = EventFinish
 			t.event.FinishReason = raw.FinishReason
-			if raw.TotalUsage != nil {
+			// finish-step uses "usage", finish uses "totalUsage". Prefer usage
+			// (richer, arrives first), fall back to totalUsage.
+			switch {
+			case raw.Usage != nil:
+				t.event.Usage = &EventUsage{
+					InputTokens:              raw.Usage.InputTokens,
+					OutputTokens:             raw.Usage.OutputTokens,
+					CacheReadInputTokens:     raw.Usage.CacheReadInputTokens,
+					CacheCreationInputTokens: raw.Usage.CacheCreationInputTokens,
+				}
+			case raw.TotalUsage != nil:
 				t.event.Usage = &EventUsage{
 					InputTokens:              raw.TotalUsage.InputTokens,
 					OutputTokens:             raw.TotalUsage.OutputTokens,
@@ -141,6 +152,22 @@ func (t *EventTranslator) Next() bool {
 					CacheCreationInputTokens: raw.TotalUsage.CacheCreationInputTokens,
 				}
 			}
+			// Deduplicate: upstream sends both finish-step and finish.
+			// Emit the first one that has usage data. If the first had
+			// none, skip it and let the second one through.
+			if t.finishSeen {
+				continue
+			}
+			if t.event.Usage != nil {
+				t.finishSeen = true
+			} else if raw.Type == "finish" {
+				// Last chance — finish without usage. Emit it anyway.
+				t.finishSeen = true
+			} else {
+				// finish-step without usage — skip, hope finish brings it.
+				continue
+			}
+			return true
 		case "error":
 			t.event.Type = EventError
 			if raw.Error != nil {

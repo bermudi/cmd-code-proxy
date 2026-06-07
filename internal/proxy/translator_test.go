@@ -122,7 +122,7 @@ func TestEventTranslator_ToolCall(t *testing.T) {
 }
 
 func TestEventTranslator_Finish(t *testing.T) {
-	lines := `{"type":"finish","finishReason":"stop","totalUsage":{"inputTokens":100,"outputTokens":50,"cacheReadInputTokens":10,"cacheCreationInputTokens":5}}`
+	lines := `{"type":"finish","finishReason":"stop","totalUsage":{"inputTokens":100,"outputTokens":50,"cachedInputTokens":10,"cacheCreationInputTokens":5}}`
 	tr := NewEventTranslator(strings.NewReader(lines))
 	events := collectEvents(t, tr)
 
@@ -141,6 +141,76 @@ func TestEventTranslator_Finish(t *testing.T) {
 	}
 	if u.CacheReadInputTokens != 10 || u.CacheCreationInputTokens != 5 {
 		t.Errorf("cache tokens = %d/%d, want 10/5", u.CacheReadInputTokens, u.CacheCreationInputTokens)
+	}
+}
+
+func TestEventTranslator_FinishStep(t *testing.T) {
+	// finish-step uses "usage" key instead of "totalUsage"
+	lines := `{"type":"finish-step","finishReason":"stop","usage":{"inputTokens":5320,"outputTokens":42,"cachedInputTokens":5234}}`
+	tr := NewEventTranslator(strings.NewReader(lines))
+	events := collectEvents(t, tr)
+
+	if events[0].Type != EventFinish {
+		t.Fatalf("type = %v, want EventFinish", events[0].Type)
+	}
+	if events[0].FinishReason != "stop" {
+		t.Errorf("finishReason = %q, want %q", events[0].FinishReason, "stop")
+	}
+	u := events[0].Usage
+	if u == nil {
+		t.Fatal("usage is nil")
+	}
+	if u.InputTokens != 5320 || u.OutputTokens != 42 {
+		t.Errorf("tokens = %d/%d, want 5320/42", u.InputTokens, u.OutputTokens)
+	}
+	if u.CacheReadInputTokens != 5234 {
+		t.Errorf("cacheRead = %d, want 5234", u.CacheReadInputTokens)
+	}
+}
+
+func TestEventTranslator_FinishStepThenFinish_Deduplicates(t *testing.T) {
+	// Upstream sends both finish-step and finish with identical data.
+	// The translator should deduplicate — only the first one is emitted.
+	lines := "{\"type\":\"finish-step\",\"finishReason\":\"tool-calls\",\"rawFinishReason\":\"tool_use\",\"usage\":{\"inputTokens\":100,\"outputTokens\":50}}\n{\"type\":\"finish\",\"finishReason\":\"tool-calls\",\"rawFinishReason\":\"tool_use\",\"totalUsage\":{\"inputTokens\":100,\"outputTokens\":50}}"
+	tr := NewEventTranslator(strings.NewReader(lines))
+	events := collectEvents(t, tr)
+
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event (deduplicated), got %d", len(events))
+	}
+	if events[0].Type != EventFinish {
+		t.Fatalf("expected EventFinish, got %v", events[0].Type)
+	}
+	// The first event was finish-step with usage, so usage should be populated.
+	if events[0].Usage == nil {
+		t.Fatal("expected usage from finish-step to be preserved")
+	}
+	if events[0].Usage.InputTokens != 100 {
+		t.Errorf("InputTokens = %d, want 100", events[0].Usage.InputTokens)
+	}
+}
+
+func TestEventTranslator_FinishStepBareThenFinishWithUsage(t *testing.T) {
+	// Edge case: finish-step arrives without usage, finish brings it.
+	// The translator should skip the bare finish-step and emit the finish.
+	lines := "{\"type\":\"finish-step\",\"finishReason\":\"stop\"}\n{\"type\":\"finish\",\"finishReason\":\"stop\",\"totalUsage\":{\"inputTokens\":100,\"outputTokens\":50,\"cachedInputTokens\":10}}"
+	tr := NewEventTranslator(strings.NewReader(lines))
+	events := collectEvents(t, tr)
+
+	if len(events) != 1 {
+		t.Fatalf("expected 1 event (deduplicated), got %d", len(events))
+	}
+	if events[0].Type != EventFinish {
+		t.Fatalf("expected EventFinish, got %v", events[0].Type)
+	}
+	if events[0].Usage == nil {
+		t.Fatal("expected usage from finish to be preserved after skipping bare finish-step")
+	}
+	if events[0].Usage.InputTokens != 100 {
+		t.Errorf("InputTokens = %d, want 100", events[0].Usage.InputTokens)
+	}
+	if events[0].Usage.CacheReadInputTokens != 10 {
+		t.Errorf("CacheReadInputTokens = %d, want 10", events[0].Usage.CacheReadInputTokens)
 	}
 }
 

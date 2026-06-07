@@ -797,13 +797,22 @@ var parityFixtures = []parityFixture{
 		name: "finish_with_usage",
 		ndjson: strings.Join([]string{
 			`{"type":"text-delta","text":"x"}`,
-			`{"type":"finish","finishReason":"stop","totalUsage":{"inputTokens":10,"outputTokens":3,"cacheReadInputTokens":1,"cacheCreationInputTokens":2}}`,
+			`{"type":"finish","finishReason":"stop","totalUsage":{"inputTokens":10,"outputTokens":3,"cachedInputTokens":1,"cacheCreationInputTokens":2}}`,
 		}, "\n"),
 		// Old code dropped usage in streaming; new code emits it on the
 		// final chunk. Intentional improvement — lets clients (like Pi)
 		// report token counts.
+		//
+		// prompt_tokens changed from 10 (total including cached) to 7
+		// (non-cached only: 10 - 1 cacheRead - 2 cacheWrite = 7).
+		// This is an intentional fix: OpenAI convention is that
+		// prompt_tokens and cache_read_tokens are disjoint. The old code
+		// double-counted cached tokens.
 		expected: map[string]constraint{
-			"usage": valuePresent(),
+			"usage":                   valuePresent(),
+			"usage.prompt_tokens":     valueIs(float64(7)),
+			"usage.cache_read_tokens": valueIs(float64(1)),
+			"usage.cache_write_tokens": valueIs(float64(2)),
 		},
 	},
 	{

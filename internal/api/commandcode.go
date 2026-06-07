@@ -71,7 +71,16 @@ type CCStreamEvent struct {
 	TotalUsage *struct {
 		InputTokens              int `json:"inputTokens"`
 		OutputTokens             int `json:"outputTokens"`
-		CacheReadInputTokens     int `json:"cacheReadInputTokens,omitempty"`
+		CacheReadInputTokens     int `json:"cachedInputTokens,omitempty"`
 		CacheCreationInputTokens int `json:"cacheCreationInputTokens,omitempty"`
 	} `json:"totalUsage"`
+
+	// Usage is the per-step usage object from finish-step events.
+	// Structurally similar to TotalUsage but may carry richer details.
+	Usage *struct {
+		InputTokens              int `json:"inputTokens"`
+		OutputTokens             int `json:"outputTokens"`
+		CacheReadInputTokens     int `json:"cachedInputTokens,omitempty"`
+		CacheCreationInputTokens int `json:"cacheCreationInputTokens,omitempty"`
+	} `json:"usage"`
 }
