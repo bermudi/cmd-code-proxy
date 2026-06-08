@@ -19,14 +19,35 @@ OpenAI client → localhost:55990/v1/chat/completions (OpenAI format)
                       ↕  convert.go
               api.commandcode.ai/alpha/generate (NDJSON, content-parts format)
 ```
-Two non-obvious decisions:
+
+### The proxy has no project context
+The proxy process runs in its own checkout directory
+(`/home/daniel/build/command-code-proxy-server`). It does **not** run in
+the user's project. The only project identifier it receives is the
+`x_command_code_working_dir` header from the pi cc-cwd extension.
+
+Without that header, the proxy would only know its own CWD — it has no
+way to discover which project pi is working in. This means the proxy
+**cannot** gather project-environment data (git branch, recent commits,
+directory structure, etc.) on its own. That information must come from
+the client (the pi extension) alongside the request.
+
+Currently `populateConfigFromFS` shells out to `git` and calls
+`os.ReadDir` using the `workingDir` header value as a **local-deployment
+stopgap** — it works only because both processes are on the same machine
+and the proxy can technically read `/home/daniel/Documents/NewsWiki` if
+someone tells it to. The correct architecture is for the pi extension to
+collect this data and send it; see ROADMAP.md § 2.8.
+
+Three non-obvious decisions:
 
 - **CommandCode uses Anthropic-style content parts** (`[{type:"text"},{type:"tool-call"}]`), not OpenAI's flat structure. `convert.go` translates.
 - **Three parallel tool streaming protocols must all be handled**: legacy `tool-use` + `tool-delta`, modern `tool-input-start` + `tool-input-delta`, and inline `tool-call`. Adding a fourth is a real protocol change — see the Process section.
+- **CommandCode's gateway builds the system prompt server-side.** The real `command-code` binary never sends system content in `params.messages[]` — only `user | assistant | tool`. The gateway reads the project's AGENTS.md, skills, etc. from disk using `config.workingDir`. The proxy must drop all system/developer messages before forwarding; the gateway reconstructs them. See MAINTAINING.md § CommandCode gateway protocol for the full protocol notes.
 
 ## Conventions
 - **All upstream requests use `stream: true`.** Non-streaming client mode buffers NDJSON and assembles a final response. Do not "optimize" by setting stream=false on non-streaming requests.
-- **System messages hoist to a top-level `system` field.** They are not left in the messages array. CommandCode rejects them otherwise.
+- **System/developer messages are dropped before forwarding.** The gateway builds the system prompt server-side from `config.workingDir`. If every input message is system, the proxy 400s instead of forwarding an empty message list. See MAINTAINING.md § CommandCode gateway protocol for the full protocol notes.
 - **Tool results whose content starts with `Error:` get `type: "error-text"`.** Stable data contract; do not "fix" this.
 - **The response side exposes `reasoning_content` on both `Message` and `Delta`.** De facto standard among reasoning-model gateways (DeepSeek, Qwen, Anthropic-protocol bridges) and matches the upstream `command-code` binary. Strict OpenAI SDKs ignore it; reasoning-aware clients consume it.
 
@@ -56,6 +77,22 @@ curl http://127.0.0.1:55990/health
 curl http://127.0.0.1:55990/v1/models
 ```
 The parity test runs as part of `go test ./...`. It enforces byte-equivalence (streaming) or class-equivalence (non-streaming) against the vendored pre-refactor code.
+
+## Capturing real `command-code` traffic
+
+When debugging request-fidelity questions, ground truth is captures from the real `command-code` binary. The procedure lives in [MAINTAINING.md](MAINTAINING.md) § Capturing real binary traffic. Short version:
+
+```sh
+# Start cmd-recorder (listens on :9090, captures to ./captures/)
+/home/daniel/build/cmd-recorder/cmd-recorder ./captures :9090 &
+
+# Point command-code at the recorder (BOTH env vars required; --local also works)
+cd /path/to/project
+COMMANDCODE_SANDBOX=true COMMANDCODE_API_URL=http://127.0.0.1:9090 \
+  command-code --skip-onboarding -p "<prompt>"
+```
+
+The `COMMANDCODE_API_URL` env var is silently ignored unless `COMMANDCODE_SANDBOX=true` is also set — the minified `getApiBaseUrl()` in `dist/index.mjs` is the source of truth for this.
 
 ## Goals
 What this proxy should always do well:

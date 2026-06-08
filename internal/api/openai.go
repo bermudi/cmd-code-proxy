@@ -60,6 +60,7 @@ type OpenAIChatRequest struct {
 	FrequencyPenalty          *float64        `json:"frequency_penalty,omitempty"`
 	User                     string          `json:"user,omitempty"`
 	XCommandCodeWorkingDir   string          `json:"x_command_code_working_dir,omitempty"`
+	XCommandCodeConfig      *CCConfig       `json:"x_command_code_config,omitempty"`
 }
 
 type OpenAIResponsesRequest struct {
@@ -78,7 +79,8 @@ type OpenAIResponsesRequest struct {
 	Stop                     any      `json:"stop,omitempty"`
 	TopP                     *float64 `json:"top_p,omitempty"`
 	User                     string   `json:"user,omitempty"`
-	XCommandCodeWorkingDir   string   `json:"x_command_code_working_dir,omitempty"`
+	XCommandCodeWorkingDir   string    `json:"x_command_code_working_dir,omitempty"`
+	XCommandCodeConfig      *CCConfig `json:"x_command_code_config,omitempty"`
 }
 
 type OpenAIChoice struct {

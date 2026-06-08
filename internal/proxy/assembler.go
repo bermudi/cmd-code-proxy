@@ -12,34 +12,28 @@ import (
 	"github.com/bermudi/cmd-code-proxy/internal/api"
 )
 
+// sink receives mode-specific side effects from the assembler's event
+// dispatch. streamSink writes SSE chunks as they arrive; finalSink
+// buffers and emits one JSON response at the end.
+type sink interface {
+	textDelta(text string)
+	reasoningDelta(text string)
+	toolStart(idx int, id, name, args string)
+	toolArgs(idx int, args string)
+	toolCallEnrich(idx int, name, args string)
+	finish(reason string, usage *api.OpenAIUsage)
+	finalize() error
+}
+
 // ResponseAssembler owns the per-event dispatch that turns a CommandCode NDJSON
-// stream into an OpenAI-shaped response. It exists so that streaming and
-// non-streaming handlers share one switch, one tool-index registry, and one
-// finish-reason policy — instead of two switches that drift on protocol fixes.
-//
-// Construct with NewStreamAssembler (writes SSE as events arrive) or
-// NewFinalAssembler (buffers and emits a single JSON response). The constructor
-// flag picks the mode; the event dispatch is identical.
+// stream into an OpenAI-shaped response. It drives the EventTranslator loop
+// and delegates all output to a sink — streamSink for SSE, finalSink for a
+// single JSON body.
 type ResponseAssembler struct {
-	p       *Proxy
-	w       http.ResponseWriter
-	flusher http.Flusher // nil for non-streaming
-	requestID,
-	model string
-	created   int64
-	streaming bool
-
-	// State shared across event handlers.
-	sentRole     bool
-	toolRegistry toolIndexRegistry
-	finishReason string
-	usage        *api.OpenAIUsage
-
-	// Non-streaming accumulation.
-	contentBuilder          strings.Builder
-	reasoningContentBuilder strings.Builder
-	toolCalls               []api.ToolCall
-	hasToolCalls            bool
+	p              *Proxy
+	toolRegistry   toolIndexRegistry
+	sink           sink
+	promoteOrphans bool // true for streaming, false for final
 }
 
 // NewStreamAssembler returns an assembler that writes OpenAI SSE chunks as
@@ -47,14 +41,10 @@ type ResponseAssembler struct {
 // (Content-Type: text/event-stream, etc.) and obtained a Flusher from w.
 func NewStreamAssembler(p *Proxy, w http.ResponseWriter, flusher http.Flusher, requestID, model string, created int64) *ResponseAssembler {
 	return &ResponseAssembler{
-		p:            p,
-		w:            w,
-		flusher:      flusher,
-		requestID:    requestID,
-		model:        model,
-		created:      created,
-		streaming:    true,
-		toolRegistry: newToolIndexRegistry(),
+		p:              p,
+		toolRegistry:   newToolIndexRegistry(),
+		sink:           newStreamSink(w, flusher, requestID, model, created),
+		promoteOrphans: true,
 	}
 }
 
@@ -62,12 +52,10 @@ func NewStreamAssembler(p *Proxy, w http.ResponseWriter, flusher http.Flusher, r
 // emits a single OpenAI chat-completion JSON object on completion.
 func NewFinalAssembler(p *Proxy, w http.ResponseWriter, requestID, model string, created int64) *ResponseAssembler {
 	return &ResponseAssembler{
-		p:            p,
-		w:            w,
-		requestID:    requestID,
-		model:        model,
-		created:      created,
-		toolRegistry: newToolIndexRegistry(),
+		p:              p,
+		toolRegistry:   newToolIndexRegistry(),
+		sink:           newFinalSink(w, requestID, model, created),
+		promoteOrphans: false,
 	}
 }
 
@@ -90,29 +78,25 @@ func (a *ResponseAssembler) Run(ctx context.Context, body io.ReadCloser) error {
 		return err
 	}
 
-	if !a.streaming {
-		return a.writeFinal()
-	}
-	return nil
+	return a.sink.finalize()
 }
 
-// handle is the single switch. Each case is a one-line dispatch to the mode
-// methods below; the per-mode work lives in the strategy methods, so a
-// protocol change touches one case body and the relevant strategy method —
-// not two adjacent code blocks.
+// handle is the single switch. Each case resolves any registry lookups
+// needed, then delegates to the sink. The sink never touches the registry.
 func (a *ResponseAssembler) handle(event Event) {
 	switch event.Type {
 	case EventTextDelta:
-		a.onTextDelta(event.Text)
+		a.sink.textDelta(event.Text)
 
 	case EventReasoningStart, EventReasoningEnd, EventToolResult:
 		// Informational; no output in either mode.
 
 	case EventReasoningDelta:
-		a.onReasoningDelta(event.Text)
+		a.sink.reasoningDelta(event.Text)
 
 	case EventToolUse:
-		a.onToolStart(event.ToolCallID, event.ToolName, "", nil)
+		idx := a.toolRegistry.register(event.ToolCallID)
+		a.sink.toolStart(idx, event.ToolCallID, event.ToolName, "")
 
 	case EventToolDelta:
 		// No id; extends whatever the most-recently-started tool was.
@@ -121,29 +105,29 @@ func (a *ResponseAssembler) handle(event Event) {
 			log.Printf("[WARN] tool-delta with no preceding tool event")
 			return
 		}
-		a.onToolArgs(idx, event.Text, false /* not canonical */)
+		a.sink.toolArgs(idx, event.Text)
 
 	case EventToolInputStart:
-		a.onToolStart(event.ID, event.ToolName, "", nil)
+		idx := a.toolRegistry.register(event.ID)
+		a.sink.toolStart(idx, event.ID, event.ToolName, "")
 
 	case EventToolInputDelta:
 		idx, ok := a.toolRegistry.lookup(event.ID)
 		if !ok {
 			// Defensive: a delta arrived without a matching start. The
 			// upstream contract guarantees a start precedes deltas, so this
-			// is malformed input. We log and drop in non-streaming mode;
-			// in streaming we still emit the delta (at a fresh index) so
-			// the client at least sees the data — matching the legacy
-			// behavior of producing a single args chunk with no id.
+			// is malformed input. Streaming promotes the orphan to a fresh
+			// slot so the client at least sees the data; non-streaming drops
+			// it to avoid fabricating a phantom tool call.
 			log.Printf("[WARN] tool-input-delta for unknown id %q", event.ID)
-			if !a.streaming {
+			if !a.promoteOrphans {
 				return
 			}
 			idx = a.toolRegistry.register(event.ID)
-			a.onToolArgs(idx, event.Delta, false)
+			a.sink.toolArgs(idx, event.Delta)
 			return
 		}
-		a.onToolArgs(idx, event.Delta, false)
+		a.sink.toolArgs(idx, event.Delta)
 
 	case EventToolCall:
 		args := ""
@@ -152,142 +136,55 @@ func (a *ResponseAssembler) handle(event Event) {
 				args = string(data)
 			}
 		}
-		if _, ok := a.toolRegistry.lookup(event.ToolCallID); ok {
+		if idx, ok := a.toolRegistry.lookup(event.ToolCallID); ok {
 			// Id already seen via tool-input-start / tool-use. The
 			// canonical args replace the streamed fragments; the
 			// canonical name fills in if missing. Streaming suppresses
 			// emission entirely (the client already saw the chunks).
-			a.onToolCallEnrich(event.ToolCallID, event.ToolName, args)
+			a.sink.toolCallEnrich(idx, event.ToolName, args)
 			return
 		}
-		a.onToolStart(event.ToolCallID, event.ToolName, args, event.Input)
+		idx := a.toolRegistry.register(event.ToolCallID)
+		a.sink.toolStart(idx, event.ToolCallID, event.ToolName, args)
 
 	case EventFinish:
-		a.onFinish(event)
+		reason := normalizeFinishReason(event.FinishReason)
+		var usage *api.OpenAIUsage
+		if event.Usage != nil {
+			usage = usageFromEvent(event.Usage)
+		}
+		a.sink.finish(reason, usage)
 
 	case EventError:
 		log.Printf("[ERROR] Stream error: %v", event.Error)
 	}
 }
 
-// --- per-event mode strategies -------------------------------------------
-//
-// Each strategy branches on streaming vs. buffered in exactly one place —
-// the methods below. The cases in handle() are mode-agnostic, so adding a
-// new mode (e.g. "tee" — write both) is a matter of implementing these
-// methods on a new type, not editing every case.
+// --- streamSink: writes SSE chunks as events arrive -----------------------
 
-func (a *ResponseAssembler) onTextDelta(text string) {
-	if a.streaming {
-		a.streamText(text)
-		return
-	}
-	a.contentBuilder.WriteString(text)
+type streamSink struct {
+	w         http.ResponseWriter
+	flusher   http.Flusher
+	requestID string
+	model     string
+	created   int64
+	sentRole  bool
 }
 
-func (a *ResponseAssembler) onReasoningDelta(text string) {
-	if a.streaming {
-		a.streamReasoning(text)
-		return
-	}
-	a.reasoningContentBuilder.WriteString(text)
+func newStreamSink(w http.ResponseWriter, flusher http.Flusher, requestID, model string, created int64) *streamSink {
+	return &streamSink{w: w, flusher: flusher, requestID: requestID, model: model, created: created}
 }
 
-// onToolStart registers the tool (or reuses its existing index) and emits
-// the start-of-tool event. args is non-empty only when input was provided
-// inline (the tool-call event path).
-func (a *ResponseAssembler) onToolStart(idKey, name, args string, _ map[string]any) {
-	idx := a.toolRegistry.register(idKey)
-	if a.streaming {
-		a.streamToolStart(idx, idKey, name, args)
-		return
-	}
-	a.hasToolCalls = true
-	a.toolCalls = append(a.toolCalls, api.ToolCall{
-		ID:   idKey,
-		Type: "function",
-		Function: api.FunctionCall{
-			Name:      name,
-			Arguments: args,
-		},
-	})
+func (s *streamSink) textDelta(text string) {
+	s.emitWithRole(api.OpenAIDelta{Content: text})
 }
 
-// onToolArgs appends an arguments fragment to the given tool. canonical
-// is true when the args came from a tool-call event (replacing, not
-// appending); it's currently unused in non-streaming code paths because
-// we only call onToolCallEnrich from the seen-via-lookup branch.
-func (a *ResponseAssembler) onToolArgs(idx int, args string, _ bool) {
-	if a.streaming {
-		a.streamToolArgs(idx, args)
-		return
-	}
-	if idx >= 0 && idx < len(a.toolCalls) {
-		a.toolCalls[idx].Function.Arguments += args
-	}
+func (s *streamSink) reasoningDelta(text string) {
+	s.emitWithRole(api.OpenAIDelta{ReasoningContent: text})
 }
 
-// onToolCallEnrich is invoked when a tool-call event arrives for an id
-// already known to the registry. Streaming suppresses emission (the
-// client already saw the chunks); non-streaming updates the slot.
-func (a *ResponseAssembler) onToolCallEnrich(idKey, name, args string) {
-	idx, ok := a.toolRegistry.lookup(idKey)
-	if !ok {
-		return
-	}
-	if a.streaming {
-		return
-	}
-	if name != "" {
-		a.toolCalls[idx].Function.Name = name
-	}
-	if args != "" {
-		a.toolCalls[idx].Function.Arguments = args
-	}
-}
-
-func (a *ResponseAssembler) onFinish(event Event) {
-	a.finishReason = normalizeFinishReason(event.FinishReason)
-	if event.Usage != nil {
-		a.usage = usageFromEvent(event.Usage)
-	}
-	if a.streaming {
-		a.streamFinish()
-	}
-}
-
-// --- streaming emitters ---------------------------------------------------
-
-func (a *ResponseAssembler) baseChunk() api.OpenAIChatResponse {
-	return api.OpenAIChatResponse{
-		ID:      a.requestID,
-		Object:  "chat.completion.chunk",
-		Created: a.created,
-		Model:   a.model,
-		Choices: []api.OpenAIChoice{{Index: 0}},
-	}
-}
-
-func (a *ResponseAssembler) streamText(text string) {
-	a.emitWithRole(api.OpenAIDelta{Content: text})
-}
-
-func (a *ResponseAssembler) streamReasoning(text string) {
-	a.emitWithRole(api.OpenAIDelta{ReasoningContent: text})
-}
-
-func (a *ResponseAssembler) emitWithRole(delta api.OpenAIDelta) {
-	if !a.sentRole {
-		delta.Role = "assistant"
-		a.sentRole = true
-	}
-	chunk := a.baseChunk()
-	chunk.Choices[0].Delta = &delta
-	a.writeSSE(chunk)
-}
-
-func (a *ResponseAssembler) streamToolStart(idx int, id, name, args string) {
-	a.emitWithRole(api.OpenAIDelta{
+func (s *streamSink) toolStart(idx int, id, name, args string) {
+	s.emitWithRole(api.OpenAIDelta{
 		ToolCalls: []api.OpenAIDeltaToolCall{{
 			Index:    idx,
 			ID:       id,
@@ -297,76 +194,163 @@ func (a *ResponseAssembler) streamToolStart(idx int, id, name, args string) {
 	})
 }
 
-func (a *ResponseAssembler) streamToolArgs(idx int, args string) {
-	chunk := a.baseChunk()
+func (s *streamSink) toolArgs(idx int, args string) {
+	chunk := s.baseChunk()
 	chunk.Choices[0].Delta = &api.OpenAIDelta{
 		ToolCalls: []api.OpenAIDeltaToolCall{{
 			Index:    idx,
 			Function: &api.OpenAIDeltaFunction{Arguments: args},
 		}},
 	}
-	a.writeSSE(chunk)
+	s.writeSSE(chunk)
 }
 
-func (a *ResponseAssembler) streamFinish() {
-	reason := a.finishReason
-	chunk := a.baseChunk()
+func (s *streamSink) toolCallEnrich(_ int, _ string, _ string) {
+	// Already streamed via tool-input-start + deltas; suppress duplicate.
+}
+
+func (s *streamSink) finish(reason string, usage *api.OpenAIUsage) {
+	chunk := s.baseChunk()
 	chunk.Choices[0].Delta = &api.OpenAIDelta{}
 	chunk.Choices[0].FinishReason = &reason
-	if a.usage != nil {
-		chunk.Usage = a.usage
+	if usage != nil {
+		chunk.Usage = usage
 	}
-	a.writeSSE(chunk)
-	fmt.Fprintf(a.w, "data: [DONE]\n\n")
-	a.flusher.Flush()
+	s.writeSSE(chunk)
+	fmt.Fprintf(s.w, "data: [DONE]\n\n")
+	s.flusher.Flush()
 }
 
-func (a *ResponseAssembler) writeSSE(resp api.OpenAIChatResponse) {
+func (s *streamSink) finalize() error { return nil }
+
+func (s *streamSink) emitWithRole(delta api.OpenAIDelta) {
+	if !s.sentRole {
+		delta.Role = "assistant"
+		s.sentRole = true
+	}
+	chunk := s.baseChunk()
+	chunk.Choices[0].Delta = &delta
+	s.writeSSE(chunk)
+}
+
+func (s *streamSink) baseChunk() api.OpenAIChatResponse {
+	return api.OpenAIChatResponse{
+		ID:      s.requestID,
+		Object:  "chat.completion.chunk",
+		Created: s.created,
+		Model:   s.model,
+		Choices: []api.OpenAIChoice{{Index: 0}},
+	}
+}
+
+func (s *streamSink) writeSSE(resp api.OpenAIChatResponse) {
 	data, _ := json.Marshal(resp)
-	fmt.Fprintf(a.w, "data: %s\n\n", data)
-	a.flusher.Flush()
+	fmt.Fprintf(s.w, "data: %s\n\n", data)
+	s.flusher.Flush()
 }
 
-// --- non-streaming finalization ------------------------------------------
+// --- finalSink: buffers and emits one JSON response -----------------------
 
-func (a *ResponseAssembler) writeFinal() error {
+type finalSink struct {
+	w                       http.ResponseWriter
+	requestID               string
+	model                   string
+	created                 int64
+	contentBuilder          strings.Builder
+	reasoningContentBuilder strings.Builder
+	toolCalls               []api.ToolCall
+	hasToolCalls            bool
+	finishReason            string
+	usage                   *api.OpenAIUsage
+}
+
+func newFinalSink(w http.ResponseWriter, requestID, model string, created int64) *finalSink {
+	return &finalSink{w: w, requestID: requestID, model: model, created: created}
+}
+
+func (s *finalSink) textDelta(text string) {
+	s.contentBuilder.WriteString(text)
+}
+
+func (s *finalSink) reasoningDelta(text string) {
+	s.reasoningContentBuilder.WriteString(text)
+}
+
+func (s *finalSink) toolStart(idx int, id, name, args string) {
+	if idx != len(s.toolCalls) {
+		log.Printf("[WARN] finalSink: toolStart idx=%d but len(toolCalls)=%d; sequential contract violated", idx, len(s.toolCalls))
+	}
+	s.hasToolCalls = true
+	s.toolCalls = append(s.toolCalls, api.ToolCall{
+		ID:   id,
+		Type: "function",
+		Function: api.FunctionCall{
+			Name:      name,
+			Arguments: args,
+		},
+	})
+}
+
+func (s *finalSink) toolArgs(idx int, args string) {
+	if idx >= 0 && idx < len(s.toolCalls) {
+		s.toolCalls[idx].Function.Arguments += args
+	}
+}
+
+func (s *finalSink) toolCallEnrich(idx int, name, args string) {
+	if idx < 0 || idx >= len(s.toolCalls) {
+		return
+	}
+	if name != "" {
+		s.toolCalls[idx].Function.Name = name
+	}
+	if args != "" {
+		s.toolCalls[idx].Function.Arguments = args
+	}
+}
+
+func (s *finalSink) finish(reason string, usage *api.OpenAIUsage) {
+	s.finishReason = reason
+	s.usage = usage
+}
+
+func (s *finalSink) finalize() error {
 	msg := &api.OpenAIMessage{
 		Role:    "assistant",
-		Content: a.contentBuilder.String(),
+		Content: s.contentBuilder.String(),
 	}
-	if a.reasoningContentBuilder.Len() > 0 {
-		msg.ReasoningContent = a.reasoningContentBuilder.String()
+	if s.reasoningContentBuilder.Len() > 0 {
+		msg.ReasoningContent = s.reasoningContentBuilder.String()
 	}
 
 	// If upstream signaled a finish reason, that wins. Otherwise fall back
 	// to inference (tool_calls if any tool was emitted, else stop) so
 	// streams that never receive a finish event still terminate correctly.
-	finishReason := a.finishReason
+	finishReason := s.finishReason
 	if finishReason == "" {
-		if a.hasToolCalls {
+		if s.hasToolCalls {
 			finishReason = "tool_calls"
 		} else {
 			finishReason = "stop"
 		}
 	}
-	if a.hasToolCalls {
+	if s.hasToolCalls {
 		msg.Content = nil
-		msg.ToolCalls = a.toolCalls
+		msg.ToolCalls = s.toolCalls
 	}
 
-	w := a.w
-	w.Header().Set("Content-Type", "application/json")
-	return json.NewEncoder(w).Encode(api.OpenAIChatResponse{
-		ID:      a.requestID,
+	s.w.Header().Set("Content-Type", "application/json")
+	return json.NewEncoder(s.w).Encode(api.OpenAIChatResponse{
+		ID:      s.requestID,
 		Object:  "chat.completion",
-		Created: a.created,
-		Model:   a.model,
+		Created: s.created,
+		Model:   s.model,
 		Choices: []api.OpenAIChoice{{
 			Index:        0,
 			Message:      msg,
 			FinishReason: &finishReason,
 		}},
-		Usage: a.usage,
+		Usage: s.usage,
 	})
 }
 

@@ -1,6 +1,6 @@
 # Roadmap
 
-> **Status:** living document. Last reviewed: 2026-06-05.
+> **Status:** living document. Last reviewed: 2026-06-08.
 > **Supersedes:** the ordering previously implied by AGENTS.md § Nice-to-haves. The Nice-to-haves section remains a permanent catalog of ideas; this document is the time-bound plan that picks which of them to do and in what order.
 
 ## Thesis
@@ -77,7 +77,48 @@ The goal of this phase is to make the proxy pleasant to *operate* (deploy, debug
 - **Success criteria:** A comment in `main.go` (or a sibling file) lists the scope decisions. AGENTS.md links to it from the Scope section.
 - **Depends on:** nothing.
 
-### 2.4 Forward more OpenAI request fields — only when there's a real need
+### 2.5 Populate `Config` stub fields from live filesystem — ✅ stopgap
+
+- **What:** Replaced hardcoded stubs with `populateConfigFromFS()` in `proxy.go`. Fields now populated from the live filesystem using the `x_command_code_working_dir` header value as the root.
+  - `environment`: hardcoded `"linux-x64, Node.js v26.2.0"` (impersonates CLI).
+  - `structure`: `os.ReadDir(workingDir)`, filters hidden + blocklist, sorted.
+  - `isGitRepo`: checks `.git` exists.
+  - `currentBranch`: `git branch --show-current`.
+  - `mainBranch`: `git branch -r` parse (origin/main → main, origin/master → master, fallback main).
+  - `gitStatus`: summarized porcelain (`M N, A N, D N, ?? N` or `"Working tree clean"`).
+  - `recentCommits`: `git log --oneline -3`.
+- **Why:** Verified by live capture and reverse-engineering `dist/index.mjs` (v0.32.2). The stub values caused MiniMax-M3 to hallucinate "automated environment update" responses. Populating the fields fixed it.
+- **Status:** Working. All tests pass. Smoke test confirms no more hallucinations.
+- **Caveat:** This is a **local-deployment stopgap**. The proxy shells out to `git` and reads the project directory using the `workingDir` header — it works because both processes are on the same machine. The correct architecture is § 2.8 (pi extension sends this data).
+- **Success criteria:** Model stops producing "environment update" hallucinations on greetings. ✓
+- **Depends on:** `x_command_code_working_dir` header from cc-cwd extension.
+
+### 2.6 Evaluate `cc-cwd` pi extension
+
+### 2.6 Evaluate `cc-cwd` pi extension
+
+- **What:** Decide whether the `cc-cwd` extension (`~/.pi/agent/extensions/cc-cwd.ts`) is still the right knob for per-request `workingDir` overrides, or whether the proxy's `-working-dir` flag / process cwd is sufficient.
+- **Why:** The extension injects `x_command_code_working_dir` so the proxy can set `config.workingDir` per-project. The proxy already has `-working-dir` as a flag and falls back to `currentWorkingDir()`. The extension is a thin wrapper that adds per-request pi-side control. With the stub-`config` fix in 2.5, the extension's role is unchanged (it's still just the `workingDir` source), so this is a low-priority cleanup, not a correctness issue.
+- **Effort:** conversation + 30 minutes to remove if not needed.
+- **Success criteria:** Clear decision documented in AGENTS.md. If removed, the proxy's default `workingDir` behavior is unchanged.
+- **Depends on:** nothing. Follow-up from commit `66e64f0`.
+
+### 2.7 Request-shape parity test ✅
+
+- **What:** Assert the proxy's request shape matches the real `command-code` binary's shape on key properties: no system/developer roles in messages, no AGENTS.md leakage, `config.workingDir` set.
+- **Why:** The system-message bug (`normalizeRole` rewriting `system → user`) would have been caught immediately by a request-shape parity test. The response-side parity test covers the wire format out; this covers the wire format in.
+- **Effort:** done in commit `66e64f0`.
+- **Success criteria:** `paritytest/cmdcode_shape_test.go` — 4 tests, verified to catch the regression by bait-and-revert.
+- **Depends on:** `cmd-recorder` captures as ground truth.
+- **Follow-up:** after 2.5 lands, grow the parity test to assert `config.environment`, `config.structure`, and the git fields match the real binary's shape.
+
+### 2.8 Move config collection into the pi extension
+
+- **What:** The pi cc-cwd extension now collects and sends the full `config` block as `x_command_code_config` (git branch, recent commits, directory structure, environment, etc.). The proxy's `resolveConfig()` uses it when present, falls back to `populateConfigFromFS` when absent (e.g. curl, non-pi clients). The extension mirrors the real binary's exact logic: same blocklist, `git log --oneline -3`, summarized porcelain, `git branch -r` parse for mainBranch.
+- **Status:** Extension sends config ✓. Proxy accepts and forwards ✓. Fallback remains as stopgap ✓.
+- **Remaining:** Remove `populateConfigFromFS` from the proxy entirely once we're confident all request paths come through the extension.
+- **Success criteria (partial):** Extension sends all config fields. Proxy uses client config when present. `populateConfigFromFS` removed → proxy never shells out to `git` or reads a directory it wasn't told about.
+- **Extension location:** `/home/daniel/build/agent-extensions/pi/cc-cwd/cc-cwd.ts` (symlinked to `~/.pi/agent/extensions/cc-cwd.ts`). Pi runs extensions directly with Bun. The `before_provider_request` hook is async — `await pi.exec()` works for git commands.
 
 - **What:** `tool_choice`, `parallel_tool_calls`, `response_format`, `stop`, `top_p`. Implement CommandCode-side equivalents for each as the need arises.
 - **Why:** These are real gaps. They are not gaps that matter for current usage. Doing them speculatively produces code that isn't tested against a real use case, and code paths that aren't used are often subtly wrong.
@@ -92,7 +133,7 @@ Items I considered and chose *not* to do, with reasons. This section is here so 
 - **Dynamic `/v1/models` from upstream.** The hand-curated list (`fallbackModels` in `proxy.go`) is fine for personal use. The cost of dynamic fetching is a runtime dependency on upstream at startup, plus a cache-invalidation problem. The user knows what models to add when CommandCode ships them. **Don't do this unless multiple users / a containerized deployment materializes.**
 - **Full OpenAI Responses coverage.** The shim is partial by design; the chat completions endpoint is the primary surface. The fields I'd need to support (`truncation`, `metadata`, `previous_response_id`, `store`, `user`, the `reasoning` parameter) are non-trivial and tied to the Responses-specific state model. **Don't do this without a real consumer.**
 - **Public-package API boundary.** The proxy's internals are exposed to `paritytest` for convenience (the vendored old code calls into the same package). If the proxy were ever imported as a library, this would need cleanup. The work is speculative until that happens. **Don't do this.**
-- **Request-body fidelity parity test.** The current request-side tests are per-feature unit tests in `convert_test.go`. A byte-equivalence parity test would require vendoring an old request-builder, which doesn't exist as a separate function today. This is the same discipline as the response-side parity test, applied to a different surface. **Worth doing only if the request side starts evolving (i.e. if Phase 2.4 actually happens).** The pattern from `paritytest/` is reusable.
+- **Request-body fidelity parity test.** The current request-side tests are per-feature unit tests in `convert_test.go`. A byte-equivalence parity test would require vendoring an old request-builder, which doesn't exist as a separate function today. **Update (2026-06-08): the request-shape parity test landed in `paritytest/cmdcode_shape_test.go` (commit `66e64f0`).** It asserts structural properties (no system roles, no AGENTS.md leakage, `config.workingDir` set) against `cmd-recorder` captures. A full byte-equivalence test is still overkill unless Phase 2.4 happens and the request side starts evolving. The pattern from `paritytest/` is reusable.
 - **All-models version table at `/v1/models`.** There's no actual consumer for it inside the proxy. The CLI's `model.go` already maps short aliases; that's what callers use. **Don't do this.**
 
 ## What this roadmap is not

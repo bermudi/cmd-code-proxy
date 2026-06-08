@@ -374,8 +374,50 @@ func TestBuildCCRequest_Defaults(t *testing.T) {
 	if ccBody.ThreadID != nil {
 		t.Errorf("threadId = %v, want nil", ccBody.ThreadID)
 	}
-	if !strings.Contains(ccBody.Config.Environment, "proxy") {
-		t.Errorf("environment = %q, want 'proxy' substring", ccBody.Config.Environment)
+	// Without client config, falls back to populateConfigFromFS stopgap
+	if !strings.Contains(ccBody.Config.Environment, "Node.js") {
+		t.Errorf("environment = %q, want 'Node.js' substring (proxy impersonates command-code CLI)", ccBody.Config.Environment)
+	}
+}
+
+func TestBuildCCRequest_ClientConfig(t *testing.T) {
+	clientCfg := &api.CCConfig{
+		WorkingDir:    "/home/daniel/Documents/NewsWiki",
+		Date:          "2026-06-08",
+		Environment:   "linux-x64, Node.js v26.2.0",
+		Structure:     []string{"meta", "raw", "scripts", "wiki"},
+		IsGitRepo:     true,
+		CurrentBranch: "main",
+		MainBranch:    "main",
+		GitStatus:     "Working tree clean",
+		RecentCommits: []string{"abc1234 initial commit", "def5678 second commit", "ghi9012 third commit"},
+	}
+	req := api.OpenAIChatRequest{
+		Model:              "MiniMaxAI/MiniMax-M3",
+		Messages:           []api.OpenAIMessage{{Role: "user", Content: "hello"}},
+		XCommandCodeConfig: clientCfg,
+	}
+
+	ccBody, err := BuildCCRequest(req)
+	if err != nil {
+		t.Fatalf("BuildCCRequest: %v", err)
+	}
+
+	// Client config should be used verbatim — no FS fallback
+	if ccBody.Config.WorkingDir != "/home/daniel/Documents/NewsWiki" {
+		t.Errorf("workingDir = %q, want client-provided value", ccBody.Config.WorkingDir)
+	}
+	if !ccBody.Config.IsGitRepo {
+		t.Error("isGitRepo should be true from client config")
+	}
+	if ccBody.Config.CurrentBranch != "main" {
+		t.Errorf("currentBranch = %q, want 'main'", ccBody.Config.CurrentBranch)
+	}
+	if len(ccBody.Config.RecentCommits) != 3 {
+		t.Errorf("recentCommits = %v, want 3 entries", ccBody.Config.RecentCommits)
+	}
+	if ccBody.Config.Environment != "linux-x64, Node.js v26.2.0" {
+		t.Errorf("environment = %q, want client-provided value", ccBody.Config.Environment)
 	}
 }
 
