@@ -13,17 +13,51 @@ import (
 
 func TestSummarizePorcelain(t *testing.T) {
 	tests := []struct {
-		name     string
+		name      string
 		porcelain string
-		want     string
+		want      string
 	}{
+		// --- basics ---
 		{"clean", "", "Working tree clean"},
 		{"one modified", " M file1.txt", "M 1"},
 		{"mixed", " M a.txt\n M b.txt\nA c.txt\n?? d.txt\n?? e.txt", "M 2, A 1, ?? 2"},
 		{"only untracked", "?? foo\n?? bar\n?? baz", "?? 3"},
-		{"staged delete", " D old.txt", "D 1"},
+
+		// --- staged vs unstaged ---
+		{"unstaged delete", " D old.txt", "D 1"},
 		{"staged add", "A  newfile.txt", "A 1"},
-		{"no recognized prefix", "MM conflicted.txt", "MM conflicted.txt"}, // falls back to raw
+		{"staged modified", "M  staged.txt", "M 1"},
+		{"staged deleted", "D  staged-del.txt", "D 1"},
+		{"both modified", "MM both.txt", "M 1"},
+		{"added then modified", "AM file.txt", "A 1"},
+
+		// --- rename / copy ---
+		{"rename", "R  old.txt -> new.txt", "R 1"},
+		{"rename then modified", "RM rmod.txt", "R 1"},
+		{"copy", "C  orig.txt -> copy.txt", "A 1"},
+
+		// --- type change ---
+		{"type change", "T  symlink", "M 1"},
+
+		// --- unmerged (merge conflicts) ---
+		{"unmerged both modified", "UU conflict.txt", "M 1"},
+		{"unmerged both added", "AA theirs.txt", "M 1"},
+		{"unmerged both deleted", "DD ours.txt", "M 1"},
+		{"unmerged added-by-us", "AU by-us.txt", "M 1"},
+		{"unmerged added-by-them", "UA by-them.txt", "M 1"},
+		{"unmerged deleted-by-them", "UD by-them.txt", "M 1"},
+		{"unmerged deleted-by-us", "DU del-us.txt", "M 1"},
+
+		// --- ignored ---
+		{"ignored", "!! build/", "Working tree clean"},
+
+		// --- combined ---
+		{"mixed with rename", " M a.txt\nR  old -> new\n?? c.txt", "M 1, R 1, ?? 1"},
+		{"all categories", " M mod.txt\nM  staged.txt\nA  new.txt\nD  del.txt\nR  old -> new\n?? untracked", "M 2, A 1, D 1, R 1, ?? 1"},
+
+		// --- edge cases ---
+		{"short line", "X", "Working tree clean"},
+		{"empty line in middle", " M a.txt\n\n?? b.txt", "M 1, ?? 1"},
 	}
 
 	for _, tt := range tests {
@@ -128,26 +162,6 @@ func TestIsGitRepo(t *testing.T) {
 	}
 }
 
-func TestGitLogOneline(t *testing.T) {
-	dir := t.TempDir()
-	git(t, dir, "init")
-	git(t, dir, "config", "user.email", "test@test.com")
-	git(t, dir, "config", "user.name", "Test")
-	for i := 0; i < 5; i++ {
-		writeFile(t, dir, "file.txt", string(rune('a'+i)))
-		git(t, dir, "add", ".")
-		git(t, dir, "commit", "-m", "commit "+string(rune('0'+i+1)))
-	}
-
-	commits := gitLogOneline(dir, 3)
-	if len(commits) != 3 {
-		t.Fatalf("gitLogOneline(3) returned %d commits, want 3", len(commits))
-	}
-	if !strings.Contains(commits[0], "commit 5") {
-		t.Errorf("first commit = %q, want 'commit 5' substring", commits[0])
-	}
-}
-
 func TestPopulateConfigFromFS_NonGit(t *testing.T) {
 	dir := t.TempDir()
 	for _, name := range []string{"src", "docs", ".hidden", "node_modules"} {
@@ -175,7 +189,7 @@ func TestPopulateConfigFromFS_NonGit(t *testing.T) {
 		}
 	}
 	if cfg.Environment != "linux-x64, Node.js v26.2.0" {
-		t.Errorf("environment = %q, want hardcoded Node.js string", cfg.Environment)
+		t.Errorf("environment = %q, want command-code CLI impersonation string", cfg.Environment)
 	}
 }
 
@@ -201,6 +215,73 @@ func TestPopulateConfigFromFS_GitRepo(t *testing.T) {
 	}
 	if len(cfg.RecentCommits) != 1 {
 		t.Errorf("repo with 1 commit should have 1 RecentCommit, got %d", len(cfg.RecentCommits))
+	}
+}
+
+func TestGitStatusSummary_DirtyStates(t *testing.T) {
+	dir := t.TempDir()
+	git(t, dir, "init")
+	git(t, dir, "config", "user.email", "test@test.com")
+	git(t, dir, "config", "user.name", "Test")
+
+	// Initial commit with two files
+	writeFile(t, dir, "committed.txt", "original\nwith some content\nto avoid rename detection\n")
+	writeFile(t, dir, "to-delete.txt", "bye\nalso some padding\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+
+	// Create dirty states
+	writeFile(t, dir, "committed.txt", "modified\nwith some content\nto avoid rename detection\n") // unstaged modify
+	writeFile(t, dir, "new.txt", "fresh") // untracked
+	git(t, dir, "rm", "to-delete.txt")  // staged delete
+
+	summary := gitStatusSummary(dir)
+
+	if !strings.Contains(summary, "M ") {
+		t.Errorf("summary = %q, want 'M' for modified file", summary)
+	}
+	if !strings.Contains(summary, "?? ") {
+		t.Errorf("summary = %q, want '??' for untracked file", summary)
+	}
+	if !strings.Contains(summary, "D ") {
+		t.Errorf("summary = %q, want 'D' for deleted file", summary)
+	}
+}
+
+func TestGitStatusSummary_Rename(t *testing.T) {
+	dir := t.TempDir()
+	git(t, dir, "init")
+	git(t, dir, "config", "user.email", "test@test.com")
+	git(t, dir, "config", "user.name", "Test")
+	writeFile(t, dir, "old.txt", "some content here\nwith enough text\nfor rename detection\nto work reliably\n")
+	git(t, dir, "add", ".")
+	git(t, dir, "commit", "-m", "initial")
+
+	git(t, dir, "mv", "old.txt", "new.txt")
+
+	summary := gitStatusSummary(dir)
+	if !strings.Contains(summary, "R ") {
+		t.Errorf("summary after git mv = %q, want 'R' category", summary)
+	}
+}
+
+func TestGitLogOneline_LimitsToRecentCommitCount(t *testing.T) {
+	dir := t.TempDir()
+	git(t, dir, "init")
+	git(t, dir, "config", "user.email", "test@test.com")
+	git(t, dir, "config", "user.name", "Test")
+	for i := 0; i < 5; i++ {
+		writeFile(t, dir, "file.txt", string(rune('a'+i)))
+		git(t, dir, "add", ".")
+		git(t, dir, "commit", "-m", "commit "+string(rune('0'+i+1)))
+	}
+
+	commits := gitLogOneline(dir, recentCommitCount)
+	if len(commits) != recentCommitCount {
+		t.Fatalf("gitLogOneline(recentCommitCount) returned %d commits, want %d", len(commits), recentCommitCount)
+	}
+	if !strings.Contains(commits[0], "commit 5") {
+		t.Errorf("first commit = %q, want 'commit 5' substring", commits[0])
 	}
 }
 

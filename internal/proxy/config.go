@@ -24,23 +24,32 @@ func resolveConfig(clientConfig *api.CCConfig, workingDir string) api.CCConfig {
 	return populateConfigFromFS(workingDir)
 }
 
-// populateConfigFromFS fills the gateway's config struct with real values
-// from the live filesystem. The real command-code binary does this; the
-// proxy previously sent hardcoded stubs (empty structure, isGitRepo=false,
-// fake "Go proxy" environment), which made the server-side system prompt
-// look like a generic environment announcement and tripped MiniMax-M3's
-// prior for treating short input as system state.
+// populateConfigFromFS impersonates the real command-code binary's config
+// population. Every field must match what command-code would send — this
+// is not the proxy's environment, it is the proxy pretending to be
+// command-code. Fields that come from the project directory (structure,
+// git status, branch) are read from workingDir; the Environment string is
+// a static lie that matches the real binary's output.
+//
+// Previously the proxy sent stubs (empty structure, isGitRepo=false,
+// "Go proxy" environment), which made the server-side system prompt look
+// like a generic environment announcement and tripped MiniMax-M3's prior
+// for treating short input as system state.
 //
 // workingDir MUST be the project's working directory (from the cc-cwd
 // extension or the -working-dir flag), NOT os.Getwd() — the proxy
 // process runs from its own checkout dir. Reading the proxy's cwd would
 // leak the proxy's own tree (go.mod, internal/, etc.) into the gateway's
 // system prompt.
+
+// recentCommitCount matches the real command-code binary's default.
+const recentCommitCount = 3
+
 func populateConfigFromFS(workingDir string) api.CCConfig {
 	cfg := api.CCConfig{
 		WorkingDir:  workingDir,
 		Date:        time.Now().Format("2006-01-02"),
-		Environment: "linux-x64, Node.js v26.2.0", // matches command-code CLI v0.32.2
+		Environment: "linux-x64, Node.js v26.2.0", // impersonates command-code CLI v0.32.2 — NOT the proxy's real OS/runtime
 		Structure:   readDirNames(workingDir),
 	}
 	if isGitRepo(workingDir) {
@@ -48,7 +57,7 @@ func populateConfigFromFS(workingDir string) api.CCConfig {
 		cfg.CurrentBranch = gitOutput(workingDir, "branch", "--show-current")
 		cfg.MainBranch = gitMainBranch(workingDir)
 		cfg.GitStatus = gitStatusSummary(workingDir)
-		cfg.RecentCommits = gitLogOneline(workingDir, 3) // real binary uses -3
+		cfg.RecentCommits = gitLogOneline(workingDir, recentCommitCount)
 	}
 	return cfg
 }
@@ -103,29 +112,47 @@ func gitMainBranch(dir string) string {
 }
 
 // gitStatusSummary mirrors the real binary's getGitStatus: summarize
-// porcelain output as "M N, A N, D N, ?? N" or "Working tree clean".
+// porcelain output as "M N, A N, D N, R N, ?? N" or "Working tree clean".
 func gitStatusSummary(dir string) string {
 	out := gitOutput(dir, "status", "--porcelain")
 	return summarizePorcelain(out)
 }
 
-// summarizePorcelain is the pure parsing logic, extracted for testing.
+// summarizePorcelain categorizes `git status --porcelain` output into a
+// human-readable summary: "M 2, A 1, D 1, R 1, ?? 3" or "Working tree clean".
+//
+// The XY format: X = index status, Y = worktree status.
+// X: [MADRCTU ], Y: [MDTU ], special: ?? (untracked), !! (ignored).
+// Unmerged combinations (UU, AA, DD, AU, UA, DU, UD) count as modified.
+// Rename (R) is its own category. Copy (C) maps to added. Type-change (T) maps to modified.
 func summarizePorcelain(porcelain string) string {
 	if porcelain == "" {
 		return "Working tree clean"
 	}
 	lines := strings.Split(porcelain, "\n")
-	var modified, added, deleted, untracked int
+	var modified, added, deleted, renamed, untracked int
 	for _, line := range lines {
+		if len(line) < 2 {
+			continue
+		}
+		x, y := line[0], line[1]
 		switch {
-		case strings.HasPrefix(line, " M"):
-			modified++
-		case strings.HasPrefix(line, "A "):
-			added++
-		case strings.HasPrefix(line, " D"):
-			deleted++
-		case strings.HasPrefix(line, "??"):
+		case x == '?' && y == '?':
 			untracked++
+		case x == '!' && y == '!':
+			// ignored — skip
+		case x == 'U' || y == 'U' || (x == 'A' && y == 'A') || (x == 'D' && y == 'D'):
+			modified++ // unmerged → treat as modified
+		case x == 'R':
+			renamed++
+		case x == 'C':
+			added++ // copy ≈ add
+		case x == 'A':
+			added++
+		case x == 'M' || y == 'M' || x == 'T' || y == 'T':
+			modified++
+		case x == 'D' || y == 'D':
+			deleted++
 		}
 	}
 	var parts []string
@@ -138,14 +165,16 @@ func summarizePorcelain(porcelain string) string {
 	if deleted > 0 {
 		parts = append(parts, fmt.Sprintf("D %d", deleted))
 	}
+	if renamed > 0 {
+		parts = append(parts, fmt.Sprintf("R %d", renamed))
+	}
 	if untracked > 0 {
 		parts = append(parts, fmt.Sprintf("?? %d", untracked))
 	}
-	summary := strings.Join(parts, ", ")
-	if summary == "" {
-		return porcelain // fallback to raw output
+	if len(parts) == 0 {
+		return "Working tree clean"
 	}
-	return summary
+	return strings.Join(parts, ", ")
 }
 
 func gitLogOneline(dir string, n int) []string {

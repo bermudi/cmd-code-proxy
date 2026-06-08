@@ -374,9 +374,9 @@ func TestBuildCCRequest_Defaults(t *testing.T) {
 	if ccBody.ThreadID != nil {
 		t.Errorf("threadId = %v, want nil", ccBody.ThreadID)
 	}
-	// Without client config, falls back to populateConfigFromFS stopgap
+	// Without client config, falls back to populateConfigFromFS — which impersonates command-code
 	if !strings.Contains(ccBody.Config.Environment, "Node.js") {
-		t.Errorf("environment = %q, want 'Node.js' substring (proxy impersonates command-code CLI)", ccBody.Config.Environment)
+		t.Errorf("environment = %q, want 'Node.js' substring (impersonates command-code CLI)", ccBody.Config.Environment)
 	}
 }
 
