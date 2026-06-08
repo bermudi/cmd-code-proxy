@@ -1,6 +1,10 @@
 package proxy
 
-import "strings"
+import (
+	"strings"
+
+	"github.com/bermudi/cmd-code-proxy/internal/api"
+)
 
 // Map model name if client sends short name
 func MapModel(name string) string {
@@ -44,4 +48,51 @@ func MapModel(name string) string {
 	default:
 		return name // pass through as-is
 	}
+}
+
+// fallbackModels is used when dynamic fetch fails
+var fallbackModels = []api.OpenAIModel{
+	{ID: "moonshotai/Kimi-K2.6", Object: "model", Created: 0, OwnedBy: "moonshotai"},
+	{ID: "moonshotai/Kimi-K2.5", Object: "model", Created: 0, OwnedBy: "moonshotai"},
+	{ID: "zai-org/GLM-5.1", Object: "model", Created: 0, OwnedBy: "zhipuai"},
+	{ID: "zai-org/GLM-5", Object: "model", Created: 0, OwnedBy: "zhipuai"},
+	{ID: "MiniMaxAI/MiniMax-M2.7", Object: "model", Created: 0, OwnedBy: "minimaxai"},
+	{ID: "MiniMaxAI/MiniMax-M2.5", Object: "model", Created: 0, OwnedBy: "minimaxai"},
+	{ID: "MiniMaxAI/MiniMax-M3", Object: "model", Created: 0, OwnedBy: "minimaxai"},
+	{ID: "deepseek/deepseek-v4-pro", Object: "model", Created: 0, OwnedBy: "deepseek"},
+	{ID: "deepseek/deepseek-v4-flash", Object: "model", Created: 0, OwnedBy: "deepseek"},
+	{ID: "Qwen/Qwen3.6-Max-Preview", Object: "model", Created: 0, OwnedBy: "qwen"},
+	{ID: "Qwen/Qwen3.6-Plus", Object: "model", Created: 0, OwnedBy: "qwen"},
+	{ID: "stepfun/Step-3.5-Flash", Object: "model", Created: 0, OwnedBy: "stepfun"},
+	{ID: "stepfun/Step-3.7-Flash", Object: "model", Created: 0, OwnedBy: "stepfun"},
+	{ID: "Qwen/Qwen3.7-Max-Free", Object: "model", Created: 0, OwnedBy: "qwen"},
+	{ID: "Qwen/Qwen3.7-Max", Object: "model", Created: 0, OwnedBy: "qwen"},
+	{ID: "xiaomi/mimo-v2.5-pro", Object: "model", Created: 0, OwnedBy: "xiaomi"},
+	{ID: "xiaomi/mimo-v2.5", Object: "model", Created: 0, OwnedBy: "xiaomi"},
+	{ID: "google/gemini-3.1-flash-lite", Object: "model", Created: 0, OwnedBy: "google"},
+}
+
+func extractOwner(modelID string) string {
+	parts := strings.SplitN(modelID, "/", 2)
+	if len(parts) >= 2 {
+		return parts[0]
+	}
+	return "unknown"
+}
+
+func isOpenModel(m api.OpenAIModel) bool {
+	return strings.Contains(m.ID, "/")
+}
+
+func filterModels(models []api.OpenAIModel, includeClosed bool) []api.OpenAIModel {
+	if includeClosed {
+		return models
+	}
+	openModels := make([]api.OpenAIModel, 0, len(models))
+	for _, m := range models {
+		if isOpenModel(m) {
+			openModels = append(openModels, m)
+		}
+	}
+	return openModels
 }

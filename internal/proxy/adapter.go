@@ -10,6 +10,7 @@ import (
 	"math/rand"
 	"net/http"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -218,4 +219,33 @@ func calculateBackoff(attempt int) time.Duration {
 	base := baseRetryDelay * time.Duration(1<<attempt)    // 1s, 2s, 4s
 	jitter := time.Duration(rand.Int63n(int64(base) / 5)) // ±20%
 	return base + jitter
+}
+
+func projectSlugFromPath(pathName string) string {
+	var b strings.Builder
+	lastWasDash := false
+
+	pathName = strings.ToLower(pathName)
+	if len(pathName) >= 2 && pathName[1] == ':' && pathName[0] >= 'a' && pathName[0] <= 'z' {
+		pathName = pathName[2:]
+	}
+
+	for _, r := range pathName {
+		isAlnum := (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9')
+		if isAlnum {
+			b.WriteRune(r)
+			lastWasDash = false
+			continue
+		}
+		if !lastWasDash && b.Len() > 0 {
+			b.WriteByte('-')
+			lastWasDash = true
+		}
+	}
+
+	slug := strings.Trim(b.String(), "-")
+	if slug == "" {
+		return "project"
+	}
+	return slug
 }

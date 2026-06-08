@@ -67,7 +67,7 @@ The binary sends a `config` struct with fields the gateway uses for routing and 
 | `gitStatus` | `"Working tree clean"` or `"M N, A N, D N, ?? N"` | `populateConfigFromFS(workingDir)` — summarized porcelain | ✓ stopgap |
 | `recentCommits` | 3 commits with `hash subject` format (`git log --oneline -3`) | `populateConfigFromFS(workingDir)` — `git log --oneline -3` | ✓ stopgap |
 
-**All "stopgap" fields are populated by `populateConfigFromFS` in `proxy.go`, which shells out to `git` and reads the project directory using the `workingDir` header. This works on local deployment but is architecturally wrong — the proxy has no business reading the project's filesystem. See AGENTS.md § "The proxy has no project context" for the constraint and ROADMAP.md § 2.8 for the fix (pi extension sends this data).**
+**Config resolution:** The proxy's `resolveConfig()` checks for `x_command_code_config` from the pi extension first. If present (all fields populated), it uses it verbatim — the extension runs in the project directory and has the real data. If absent (curl, non-pi clients), it falls back to `populateConfigFromFS` as a local-deployment stopgap that shells out to `git` and reads the project directory using the `workingDir` header. See AGENTS.md § "The proxy has no project context" for the constraint.
 
 **`workingDir` is sent in every request, not just the first.** Verified across 4 separate `command-code` runs in the same project — all carried the full `config` block including `workingDir`. Each `-p` run is a new session (new `threadId`) but sends the same `config`.
 
