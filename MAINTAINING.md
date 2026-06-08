@@ -73,6 +73,8 @@ The binary sends a `config` struct with fields the gateway uses for routing and 
 
 **The gateway uses these fields to build the server-side system prompt.** MiniMax-M3 was distracted by stub config values (empty `structure`, `isGitRepo: false`, `"Go proxy"` environment) — the gateway's server-side prompt looked like a generic environment announcement, so the model reasonably responded with "automated environment update" acks. It was not hallucinating, just interpreting the bad input correctly. Populating the fields from the live filesystem fixed the distraction. See § Reverse-engineered binary behavior below for the exact logic the real binary uses.
 
+**Theory (2026-06-08): The missing `threadId` may have been a contributing factor.** The proxy used to omit `threadId` entirely, while the real binary sends a UUID per session. If the gateway constructs the system prompt only on the first message of a session and caches it for subsequent turns, then every proxy request was a *new session* with a fresh system prompt. The model would see the environment context as new each time and respond with "automated environment update" acks. The `threadId` fix (generating one per request) makes the proxy's request shape match the real binary's session model.
+
 ### Reverse-engineered binary behavior (`dist/index.mjs`, v0.32.2)
 
 The real binary constructs the `config` struct via `getEnvironmentContext()` in `src/utils/environment.ts`. Here's the exact logic, extracted from the minified source:
