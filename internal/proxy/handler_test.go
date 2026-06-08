@@ -522,25 +522,48 @@ func TestHandleChatCompletions_CaptureDir(t *testing.T) {
 		t.Errorf("response should contain Hello, got: %s", data)
 	}
 
-	// Verify the capture file was written.
+	// Verify both capture files were written.
 	entries, err := os.ReadDir(captureDir)
 	if err != nil {
 		t.Fatalf("ReadDir: %v", err)
 	}
-	if len(entries) != 1 {
-		t.Fatalf("expected 1 capture file, got %d", len(entries))
+	if len(entries) != 2 {
+		t.Fatalf("expected 2 capture files (request + response), got %d", len(entries))
 	}
 
-	captured, err := os.ReadFile(filepath.Join(captureDir, entries[0].Name()))
-	if err != nil {
-		t.Fatalf("ReadFile: %v", err)
-	}
-
-	// The captured NDJSON must contain both lines exactly as the upstream sent them.
-	for _, line := range ndjson {
-		if !strings.Contains(string(captured), line) {
-			t.Errorf("capture missing line %q", line)
+	// Find the response file (*.ndjson).
+	var respFile, reqFile string
+	for _, e := range entries {
+		if strings.HasSuffix(e.Name(), ".ndjson") {
+			respFile = filepath.Join(captureDir, e.Name())
+		} else if strings.HasSuffix(e.Name(), ".request.json") {
+			reqFile = filepath.Join(captureDir, e.Name())
 		}
+	}
+
+	// Response capture must contain both NDJSON lines exactly.
+	respBytes, err := os.ReadFile(respFile)
+	if err != nil {
+		t.Fatalf("ReadFile response: %v", err)
+	}
+	for _, line := range ndjson {
+		if !strings.Contains(string(respBytes), line) {
+			t.Errorf("response capture missing line %q", line)
+		}
+	}
+
+	// Request capture must be valid JSON with the expected model.
+	reqBytes, err := os.ReadFile(reqFile)
+	if err != nil {
+		t.Fatalf("ReadFile request: %v", err)
+	}
+	var reqBody map[string]any
+	if err := json.Unmarshal(reqBytes, &reqBody); err != nil {
+		t.Fatalf("request capture is not valid JSON: %v", err)
+	}
+	params, ok := reqBody["params"].(map[string]any)
+	if !ok || params["model"] != "test" {
+		t.Errorf("request capture model = %v, want test", params["model"])
 	}
 }
 

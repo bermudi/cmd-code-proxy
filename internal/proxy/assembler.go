@@ -5,7 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"strings"
 
@@ -34,28 +34,31 @@ type ResponseAssembler struct {
 	toolRegistry   toolIndexRegistry
 	sink           sink
 	promoteOrphans bool // true for streaming, false for final
+	ctx            context.Context
 }
 
 // NewStreamAssembler returns an assembler that writes OpenAI SSE chunks as
 // each event arrives. The caller must have already set the response headers
 // (Content-Type: text/event-stream, etc.) and obtained a Flusher from w.
-func NewStreamAssembler(p *Proxy, w http.ResponseWriter, flusher http.Flusher, requestID, model string, created int64) *ResponseAssembler {
+func NewStreamAssembler(ctx context.Context, p *Proxy, w http.ResponseWriter, flusher http.Flusher, requestID, model string, created int64) *ResponseAssembler {
 	return &ResponseAssembler{
 		p:              p,
 		toolRegistry:   newToolIndexRegistry(),
 		sink:           newStreamSink(w, flusher, requestID, model, created),
 		promoteOrphans: true,
+		ctx:            ctx,
 	}
 }
 
 // NewFinalAssembler returns an assembler that buffers the entire stream and
 // emits a single OpenAI chat-completion JSON object on completion.
-func NewFinalAssembler(p *Proxy, w http.ResponseWriter, requestID, model string, created int64) *ResponseAssembler {
+func NewFinalAssembler(ctx context.Context, p *Proxy, w http.ResponseWriter, requestID, model string, created int64) *ResponseAssembler {
 	return &ResponseAssembler{
 		p:              p,
 		toolRegistry:   newToolIndexRegistry(),
 		sink:           newFinalSink(w, requestID, model, created),
 		promoteOrphans: false,
+		ctx:            ctx,
 	}
 }
 
@@ -70,11 +73,15 @@ func (a *ResponseAssembler) Run(ctx context.Context, body io.ReadCloser) error {
 		}
 
 		event := t.Event()
-		a.p.debugf("[DEBUG] CommandCode stream line: %s", truncateLog(event.RawLine))
+		slog.Debug("upstream stream event",
+			"request_id", RequestIDFromContext(ctx),
+			"event_type", event.Type,
+			"raw", truncateLog(event.RawLine),
+		)
 		a.handle(event)
 	}
 	if err := t.Err(); err != nil && err != io.EOF {
-		log.Printf("[ERROR] Scanner error: %v", err)
+		reqError(ctx, "NDJSON scanner error", "error", err)
 		return err
 	}
 
@@ -102,7 +109,7 @@ func (a *ResponseAssembler) handle(event Event) {
 		// No id; extends whatever the most-recently-started tool was.
 		idx := a.toolRegistry.lastIndex()
 		if idx < 0 {
-			log.Printf("[WARN] tool-delta with no preceding tool event")
+			reqWarn(a.ctx, "tool-delta with no preceding tool event")
 			return
 		}
 		a.sink.toolArgs(idx, event.Text)
@@ -119,7 +126,7 @@ func (a *ResponseAssembler) handle(event Event) {
 			// is malformed input. Streaming promotes the orphan to a fresh
 			// slot so the client at least sees the data; non-streaming drops
 			// it to avoid fabricating a phantom tool call.
-			log.Printf("[WARN] tool-input-delta for unknown id %q", event.ID)
+			reqWarn(a.ctx, "tool-input-delta for unknown id", "id", event.ID)
 			if !a.promoteOrphans {
 				return
 			}
@@ -154,10 +161,24 @@ func (a *ResponseAssembler) handle(event Event) {
 			usage = usageFromEvent(event.Usage)
 		}
 		a.sink.finish(reason, usage)
+		reqInfo(a.ctx, "upstream finish",
+			"reason", reason,
+			"prompt_tokens", usageField(usage, func(u *api.OpenAIUsage) int64 { return int64(u.PromptTokens) }),
+			"completion_tokens", usageField(usage, func(u *api.OpenAIUsage) int64 { return int64(u.CompletionTokens) }),
+			"total_tokens", usageField(usage, func(u *api.OpenAIUsage) int64 { return int64(u.TotalTokens) }),
+		)
 
 	case EventError:
-		log.Printf("[ERROR] Stream error: %v", event.Error)
+		reqError(a.ctx, "upstream stream error", "error", event.Error)
 	}
+}
+
+// usageField extracts a token count from usage, returning 0 if nil.
+func usageField(u *api.OpenAIUsage, fn func(*api.OpenAIUsage) int64) int64 {
+	if u == nil {
+		return 0
+	}
+	return fn(u)
 }
 
 // --- streamSink: writes SSE chunks as events arrive -----------------------
@@ -278,7 +299,10 @@ func (s *finalSink) reasoningDelta(text string) {
 
 func (s *finalSink) toolStart(idx int, id, name, args string) {
 	if idx != len(s.toolCalls) {
-		log.Printf("[WARN] finalSink: toolStart idx=%d but len(toolCalls)=%d; sequential contract violated", idx, len(s.toolCalls))
+		slog.Warn("finalSink: sequential contract violated",
+			"idx", idx,
+			"len_tool_calls", len(s.toolCalls),
+		)
 	}
 	s.hasToolCalls = true
 	s.toolCalls = append(s.toolCalls, api.ToolCall{

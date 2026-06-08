@@ -542,7 +542,7 @@ func runOldStream(t *testing.T, ndjson string) []byte {
 func runNewStream(t *testing.T, ndjson string) []byte {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	a := proxy.NewStreamAssembler(&proxy.Proxy{Debug: false}, rec, rec, "chatcmpl-test", "test-model", 1700000000)
+	a := proxy.NewStreamAssembler(context.Background(), &proxy.Proxy{}, rec, rec, "chatcmpl-test", "test-model", 1700000000)
 	body := io.NopCloser(strings.NewReader(ndjson))
 	if err := a.Run(context.Background(), body); err != nil {
 		t.Fatalf("new Run: %v", err)
@@ -563,7 +563,7 @@ func runOldFinal(t *testing.T, ndjson string) []byte {
 func runNewFinal(t *testing.T, ndjson string) []byte {
 	t.Helper()
 	rec := httptest.NewRecorder()
-	a := proxy.NewFinalAssembler(&proxy.Proxy{Debug: false}, rec, "chatcmpl-test", "test-model", 1700000000)
+	a := proxy.NewFinalAssembler(context.Background(), &proxy.Proxy{}, rec, "chatcmpl-test", "test-model", 1700000000)
 	body := io.NopCloser(strings.NewReader(ndjson))
 	if err := a.Run(context.Background(), body); err != nil {
 		t.Fatalf("new Run: %v", err)

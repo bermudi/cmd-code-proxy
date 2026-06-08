@@ -2,7 +2,6 @@ package proxy
 
 import (
 	"fmt"
-	"log"
 	"os"
 
 	"github.com/bermudi/cmd-code-proxy/internal/api"
@@ -17,13 +16,6 @@ func truncateLog(s string) string {
 	return s[:debugLogLimit] + fmt.Sprintf("... [truncated %d bytes]", len(s)-debugLogLimit)
 }
 
-func (p *Proxy) debugf(format string, args ...any) {
-	if p.Debug {
-		log.Printf(format, args...)
-	}
-}
-
-
 func currentWorkingDir() string {
 	workingDir, err := os.Getwd()
 	if err != nil || workingDir == "" {
@@ -32,11 +24,9 @@ func currentWorkingDir() string {
 	return workingDir
 }
 
-
 // Proxy holds handler logic and an Upstream adapter.
 type Proxy struct {
 	APIKey           string
-	Debug            bool
 	ListClosedModels bool
 	CaptureDir       string // if non-empty, tee upstream NDJSON to <CaptureDir>/<requestID>.ndjson
 	WorkingDir       string // if non-empty, overrides the process working directory sent to CommandCode

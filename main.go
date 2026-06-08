@@ -3,7 +3,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"log"
 	"net/http"
 	"os"
 
@@ -12,7 +11,6 @@ import (
 
 const appVersion = "v1.0.8"
 const repositoryURL = "https://github.com/bermudi/cmd-code-proxy"
-const debugLogging = false
 
 const defaultPort = "55990"
 const defaultHost = "127.0.0.1"
@@ -25,6 +23,7 @@ func main() {
 	captureDir := flag.String("capture-dir", "", "Directory to save raw upstream NDJSON streams (for debugging/fixture capture)")
 	workingDir := flag.String("working-dir", "", "Working directory/project context to send to CommandCode (default: proxy process working directory)")
 	showVersion := flag.Bool("version", false, "Print version and exit")
+	debug := flag.Bool("debug", false, "Enable debug-level logging")
 	flag.Parse()
 
 	if *showVersion {
@@ -41,24 +40,29 @@ func main() {
 		bindPort = *port
 	}
 
-	p := proxy.NewProxy(*apiKey, proxy.NewCCAdapter().WithDebug(debugLogging))
-	p.Debug = debugLogging
+	proxy.InitLogger()
+	if *debug {
+		proxy.EnableDebugLogging()
+	}
+
+	p := proxy.NewProxy(*apiKey, proxy.NewCCAdapter())
 	p.ListClosedModels = *listClosed
 	p.WorkingDir = *workingDir
 
 	if *captureDir != "" {
 		if err := os.MkdirAll(*captureDir, 0o755); err != nil {
-			log.Fatalf("capture-dir: %v", err)
+			fmt.Fprintf(os.Stderr, "capture-dir: %v\n", err)
+			os.Exit(1)
 		}
 		p.CaptureDir = *captureDir
-		log.Printf("Capture mode: upstream NDJSON → %s/", *captureDir)
 	}
 
 	printStartupInfo(bindHost, bindPort)
 
 	addr := bindHost + ":" + bindPort
 	if err := http.ListenAndServe(addr, proxy.NewRouter(p)); err != nil {
-		log.Fatalf("Server failed: %v", err)
+		fmt.Fprintf(os.Stderr, "Server failed: %v\n", err)
+		os.Exit(1)
 	}
 }
 

@@ -2,18 +2,19 @@ package proxy
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
 	"github.com/bermudi/cmd-code-proxy/internal/api"
-	"github.com/google/uuid"
 )
 
 func (p *Proxy) writeOpenAIError(w http.ResponseWriter, status int, message, errType string) {
@@ -32,17 +33,18 @@ func (p *Proxy) writeOpenAIError(w http.ResponseWriter, status int, message, err
 type teeReadCloser struct {
 	src io.ReadCloser
 	tee io.WriteCloser
+	ctx context.Context
 }
 
-func newTeeReadCloser(src io.ReadCloser, tee io.WriteCloser) *teeReadCloser {
-	return &teeReadCloser{src: src, tee: tee}
+func newTeeReadCloser(ctx context.Context, src io.ReadCloser, tee io.WriteCloser) *teeReadCloser {
+	return &teeReadCloser{src: src, tee: tee, ctx: ctx}
 }
 
 func (t *teeReadCloser) Read(p []byte) (int, error) {
 	n, err := t.src.Read(p)
 	if n > 0 {
 		if _, werr := t.tee.Write(p[:n]); werr != nil {
-			log.Printf("[WARN] capture: write error: %v", werr)
+			reqWarn(t.ctx, "capture write error", "error", werr)
 		}
 	}
 	return n, err
@@ -64,6 +66,9 @@ func (p *Proxy) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	ctx := r.Context()
+	reqID := RequestIDFromContext(ctx)
+
 	// Get API key from client Authorization header or server default
 	apiKey := r.Header.Get("Authorization")
 	if apiKey != "" {
@@ -72,6 +77,7 @@ func (p *Proxy) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	} else if p.APIKey != "" {
 		apiKey = p.APIKey
 	} else {
+		reqWarn(ctx, "unauthorized: no API key")
 		p.writeOpenAIError(w, http.StatusUnauthorized, "API key required. Set Authorization header.", "authentication_error")
 		return
 	}
@@ -79,19 +85,22 @@ func (p *Proxy) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// Read request
 	body, err := io.ReadAll(r.Body)
 	if err != nil {
+		reqError(ctx, "failed to read request body", "error", err)
 		p.writeOpenAIError(w, http.StatusBadRequest, "Failed to read body", "invalid_request_error")
 		return
 	}
 
-	p.debugf("[DEBUG] Client request body: %s", truncateLog(string(body)))
+	slog.Debug("client request body", "request_id", reqID, "body", truncateLog(string(body)))
 
 	var openAIReq api.OpenAIChatRequest
 	if err := json.Unmarshal(body, &openAIReq); err != nil {
+		reqError(ctx, "invalid JSON", "error", err)
 		p.writeOpenAIError(w, http.StatusBadRequest, fmt.Sprintf("Invalid JSON: %s", err.Error()), "invalid_request_error")
 		return
 	}
 
 	if len(openAIReq.Messages) == 0 {
+		reqWarn(ctx, "empty messages array")
 		p.writeOpenAIError(w, http.StatusBadRequest, "messages array is required", "invalid_request_error")
 		return
 	}
@@ -105,6 +114,7 @@ func (p *Proxy) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// Build CommandCode request
 	ccBody, err := BuildCCRequestWithWorkingDir(openAIReq, workingDir)
 	if err != nil {
+		reqError(ctx, "failed to build upstream request", "error", err)
 		p.writeOpenAIError(w, http.StatusInternalServerError, "Failed to build request", "server_error")
 		return
 	}
@@ -113,50 +123,76 @@ func (p *Proxy) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// empty messages array to CommandCode and the gateway would 400 with
 	// an opaque error. 400 here with a useful message instead.
 	if len(ccBody.Params.Messages) == 0 {
+		reqWarn(ctx, "all messages were system/developer — nothing to forward")
 		p.writeOpenAIError(w, http.StatusBadRequest,
 			"no user/assistant/tool messages in request after dropping system content",
 			"invalid_request_error")
 		return
 	}
 
+	// Inject request attrs into context so all downstream logging carries them.
+	ctx = WithRequestAttrs(ctx, requestAttrs{
+		Model:      ccBody.Params.Model,
+		Stream:     openAIReq.Stream,
+		WorkingDir: workingDir,
+	})
+
+	reqInfo(ctx, "request start",
+		"messages", len(openAIReq.Messages),
+		"tools", len(openAIReq.Tools),
+	)
+	start := time.Now()
+
+	// Capture the request body before sending it — even if the upstream
+	// call fails, we want to know what was sent for debugging.
+	if p.CaptureDir != "" {
+		reqJSON, _ := json.MarshalIndent(ccBody, "", "  ")
+		reqPath := filepath.Join(p.CaptureDir, reqID+".request.json")
+		if err := os.WriteFile(reqPath, reqJSON, 0o644); err != nil {
+			reqWarn(ctx, "capture request write failed", "error", err, "path", reqPath)
+		}
+	}
+
 	// Call upstream
-	respBody, err := p.upstream.Generate(r.Context(), ccBody, apiKey)
+	respBody, err := p.upstream.Generate(ctx, ccBody, apiKey)
 	if err != nil {
 		var ue *UpstreamError
 		if errors.As(err, &ue) {
-			message := fmt.Sprintf("Upstream error: %s", ue.Body)
-			log.Printf("[ERROR] Upstream returned %d: %s", ue.StatusCode, ue.Body)
-			if ue.StatusCode >= http.StatusBadRequest && ue.StatusCode < http.StatusInternalServerError {
-				reqJSON, _ := json.Marshal(ccBody)
-				log.Printf("[ERROR] Request body that caused %d: %s", ue.StatusCode, truncateLog(string(reqJSON)))
-			}
+			reqError(ctx, "upstream error",
+				"status", ue.StatusCode,
+				"body", truncateLog(ue.Body),
+			)
 			status := http.StatusBadGateway
 			if ue.StatusCode >= http.StatusBadRequest && ue.StatusCode < http.StatusInternalServerError {
 				status = ue.StatusCode
 			}
-			p.writeOpenAIError(w, status, message, "api_error")
+			p.writeOpenAIError(w, status, fmt.Sprintf("Upstream error: %s", ue.Body), "api_error")
 		} else {
+			reqError(ctx, "upstream call failed", "error", err)
 			p.writeOpenAIError(w, http.StatusBadGateway, err.Error(), "api_error")
 		}
 		return
 	}
 	defer respBody.Close()
 
-	requestID := "chatcmpl-" + uuid.New().String()[:29]
+	// The request ID from the middleware becomes the OpenAI response ID
+	// (chatcmpl-<uuid>). The middleware already sets X-Request-Id on
+	// every response.
 	created := time.Now().Unix()
 
-	// Tee upstream body to capture file if CaptureDir is set.
+	// Tee the upstream response to a capture file when CaptureDir is set.
 	if p.CaptureDir != "" {
-		if f, err := os.CreateTemp(p.CaptureDir, requestID+"-*.ndjson"); err != nil {
-			log.Printf("[WARN] capture: failed to create file in %s: %v", p.CaptureDir, err)
+		if f, err := os.CreateTemp(p.CaptureDir, reqID+"-*.ndjson"); err != nil {
+			reqWarn(ctx, "capture response file creation failed", "error", err)
 		} else {
-			respBody = newTeeReadCloser(respBody, f)
+			respBody = newTeeReadCloser(ctx, respBody, f)
 		}
 	}
 
 	if openAIReq.Stream {
 		flusher, ok := w.(http.Flusher)
 		if !ok {
+			reqError(ctx, "streaming not supported by transport")
 			p.writeOpenAIError(w, http.StatusInternalServerError, "Streaming not supported", "server_error")
 			return
 		}
@@ -165,11 +201,13 @@ func (p *Proxy) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Connection", "keep-alive")
 		w.WriteHeader(http.StatusOK)
 
-		a := NewStreamAssembler(p, w, flusher, requestID, ccBody.Params.Model, created)
-		_ = a.Run(r.Context(), respBody)
-		return
+		a := NewStreamAssembler(ctx, p, w, flusher, reqID, ccBody.Params.Model, created)
+		_ = a.Run(ctx, respBody)
+	} else {
+		_ = NewFinalAssembler(ctx, p, w, reqID, ccBody.Params.Model, created).Run(ctx, respBody)
 	}
-	_ = NewFinalAssembler(p, w, requestID, ccBody.Params.Model, created).Run(r.Context(), respBody)
+
+	reqInfo(ctx, "request done", "duration", time.Since(start).Round(time.Millisecond))
 }
 
 func (p *Proxy) HandleResponses(w http.ResponseWriter, r *http.Request) {
@@ -184,7 +222,7 @@ func (p *Proxy) HandleResponses(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	p.debugf("[DEBUG] Client responses request body: %s", truncateLog(string(body)))
+	slog.Debug("client responses request body", "request_id", RequestIDFromContext(r.Context()), "body", truncateLog(string(body)))
 
 	var responsesReq api.OpenAIResponsesRequest
 	if err := json.Unmarshal(body, &responsesReq); err != nil {
@@ -277,6 +315,7 @@ func responseItemsToMessages(items []any) []api.OpenAIMessage {
 
 // HandleModels handles the /v1/models endpoint
 func (p *Proxy) HandleModels(w http.ResponseWriter, r *http.Request) {
+	ctx := r.Context()
 	apiKey := r.Header.Get("Authorization")
 	if apiKey != "" {
 		apiKey = strings.TrimPrefix(apiKey, "Bearer ")
@@ -288,9 +327,9 @@ func (p *Proxy) HandleModels(w http.ResponseWriter, r *http.Request) {
 	var models []api.OpenAIModel
 	if apiKey != "" {
 		var err error
-		models, err = p.upstream.FetchModels(r.Context(), apiKey)
+		models, err = p.upstream.FetchModels(ctx, apiKey)
 		if err != nil {
-			p.debugf("[DEBUG] Failed to fetch models dynamically: %v. Using fallback.", err)
+			slog.Debug("failed to fetch models dynamically, using fallback", "error", err)
 		}
 	}
 	if len(models) == 0 {

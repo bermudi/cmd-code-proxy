@@ -61,6 +61,8 @@ go run main.go [options]
 | `-api-key` | empty | Optional default CommandCode API key |
 | `-list-closed-models` | `false` | Include closed/premium models, such as Claude and GPT, in `/v1/models` |
 | `-working-dir` | proxy process working directory | Working directory/project context to send to CommandCode |
+| `-capture-dir` | empty | Directory to save raw upstream request and response NDJSON for debugging |
+| `-debug` | `false` | Enable debug-level logging (verbose per-event NDJSON) |
 | `-version` | `false` | Print version and exit |
 
 Examples:
@@ -80,6 +82,9 @@ go run main.go -api-key your-commandcode-api-key
 
 # Include closed/premium models in /v1/models
 go run main.go -list-closed-models
+
+# Capture upstream request/response NDJSON for debugging
+go run main.go -capture-dir ./captures
 
 # Print version
 go run main.go -version
@@ -269,19 +274,40 @@ Unknown model names are passed through unchanged.
 
 Every upstream request is sent with `stream: true`. For non-streaming clients, the proxy buffers the NDJSON stream and assembles the final JSON response.
 
+## Request ID and observability
+
+Every request gets a unique `X-Request-Id` (returned in the response header) and the same ID is forwarded to CommandCode as `x-request-id`.
+
+All log lines are structured (Go `slog`). Default is human-readable text; set `PROXY_LOG_JSON=1` for JSON output suitable for `jq`.
+
+**Request capture** — `-capture-dir` writes two files per request:
+```
+chatcmpl-xxx.request.json   ← full request body sent to CommandCode
+chatcmpl-xxx-*.ndjson       ← raw upstream response (if upstream responds)
+```
+The request is captured before the upstream call, so it exists even on 401s or transport errors.
+
 ## CommandCode request context
 
-The upstream request includes CLI-compatible context fields and headers:
+The proxy impersonates the real `command-code` binary. The upstream request includes:
 
-- `config.workingDir` is the proxy process working directory, unless overridden with `-working-dir`.
-- `config.environment` is `cli`.
-- `memory`, `taste`, and `skills` are sent as JSON `null`.
-- `x-cli-environment: production`
-- `x-project-slug: <slugified working directory>`
-- `x-taste-learning: true`
-- `x-co-flag: false`
+**Config fields** (sent in `config`):
+- `workingDir` — from the pi cc-cwd extension or `-working-dir` flag (not the proxy's own checkout dir)
+- `environment` — hardcoded `"linux-x64, Node.js v26.2.0"` (matches the real CLI, not the proxy's actual runtime)
+- `date` — current date (`YYYY-MM-DD`)
+- `structure` — top-level subdirectory names from `workingDir` (filtered and sorted)
+- `isGitRepo` — `true` if `.git` exists in `workingDir`
+- `currentBranch` — `git branch --show-current`
+- `mainBranch` — `main` or `master` from `git branch -r`
+- `gitStatus` — `git status --porcelain` summary (`"M N, A N, D N, ?? N"` or `"Working tree clean"`)
+- `recentCommits` — `git log --oneline -3`
 
-If you run the proxy as a long-lived service, pass `-working-dir /path/to/project` for the project directory you want CommandCode to see.
+These fields are read from the live filesystem if the pi extension does not send a pre-populated `x_command_code_config`. The proxy's own checkout dir is intentionally not used — using it would leak the proxy's `go.mod` and `internal/` into the gateway's system prompt.
+
+**Other request fields:**
+- `permissionMode` — `"auto-accept"`
+- `params.stream` — always `true` upstream
+- `memory`/`taste` — `null`
 
 ## CommandCode version header
 

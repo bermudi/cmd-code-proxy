@@ -6,7 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"math/rand"
 	"net/http"
 	"strconv"
@@ -33,7 +33,6 @@ const modelsCacheTTL = 5 * time.Minute
 type ccAdapter struct {
 	client          *http.Client
 	baseURL         string
-	debug           bool
 	versionProvider version.Provider
 
 	modelsCache     []api.OpenAIModel
@@ -50,18 +49,6 @@ func NewCCAdapter() *ccAdapter {
 	}
 }
 
-// WithDebug enables debug logging on the adapter.
-func (a *ccAdapter) WithDebug(debug bool) *ccAdapter {
-	a.debug = debug
-	return a
-}
-
-func (a *ccAdapter) debugf(format string, args ...any) {
-	if a.debug {
-		log.Printf(format, args...)
-	}
-}
-
 // Generate implements Upstream.
 func (a *ccAdapter) Generate(ctx context.Context, ccBody api.CCRequestBody, apiKey string) (io.ReadCloser, error) {
 	var lastErr error
@@ -71,6 +58,7 @@ func (a *ccAdapter) Generate(ctx context.Context, ccBody api.CCRequestBody, apiK
 			if delay > maxRetryDelay {
 				delay = maxRetryDelay
 			}
+			reqInfo(ctx, "retrying upstream call", "attempt", attempt+1, "delay", delay)
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()
@@ -86,7 +74,7 @@ func (a *ccAdapter) Generate(ctx context.Context, ccBody api.CCRequestBody, apiK
 		resp, err := a.client.Do(ccReq)
 		if err != nil {
 			lastErr = err
-			a.debugf("[DEBUG] Request failed (attempt %d/%d): %v", attempt+1, maxRetries+1, err)
+			reqDebug(ctx, "upstream request failed", "attempt", attempt+1, "error", err)
 			continue
 		}
 
@@ -95,15 +83,18 @@ func (a *ccAdapter) Generate(ctx context.Context, ccBody api.CCRequestBody, apiK
 			retryAfter := parseRetryAfter(resp.Header.Get("Retry-After"))
 			body, _ := io.ReadAll(resp.Body)
 			resp.Body.Close()
+			reqWarn(ctx, "upstream retryable error",
+				"status", resp.StatusCode,
+				"attempt", attempt+1,
+				"retry_after", retryAfter,
+				"body", truncateLog(string(body)),
+			)
 			if retryAfter > 0 {
-				a.debugf("[DEBUG] Upstream %d, Retry-After=%s, retrying (%d/%d): %s", resp.StatusCode, retryAfter, attempt+1, maxRetries+1, string(body))
 				select {
 				case <-ctx.Done():
 					return nil, ctx.Err()
 				case <-time.After(retryAfter):
 				}
-			} else {
-				a.debugf("[DEBUG] Upstream %d, retrying (%d/%d): %s", resp.StatusCode, attempt+1, maxRetries+1, string(body))
 			}
 			continue
 		}
@@ -114,6 +105,7 @@ func (a *ccAdapter) Generate(ctx context.Context, ccBody api.CCRequestBody, apiK
 			return nil, &UpstreamError{StatusCode: resp.StatusCode, Body: string(body)}
 		}
 
+		reqInfo(ctx, "upstream connected", "status", resp.StatusCode)
 		return resp.Body, nil
 	}
 	return nil, fmt.Errorf("max retries exceeded: %w", lastErr)
@@ -179,7 +171,10 @@ func (a *ccAdapter) createUpstreamRequest(ctx context.Context, ccBody api.CCRequ
 		return nil, fmt.Errorf("failed to build request: %w", err)
 	}
 
-	a.debugf("[DEBUG] CommandCode request body: %s", truncateLog(string(reqJSON)))
+	slog.Debug("upstream request body",
+		"request_id", RequestIDFromContext(ctx),
+		"body", truncateLog(string(reqJSON)),
+	)
 
 	ccReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
 		a.baseURL+"/alpha/generate", bytes.NewReader(reqJSON))
@@ -195,6 +190,11 @@ func (a *ccAdapter) createUpstreamRequest(ctx context.Context, ccBody api.CCRequ
 	ccReq.Header.Set("x-taste-learning", "true")
 	ccReq.Header.Set("x-co-flag", "false")
 	ccReq.Header.Set("Accept", "text/event-stream")
+
+	// Forward request ID so upstream can correlate if needed.
+	if reqID := RequestIDFromContext(ctx); reqID != "" {
+		ccReq.Header.Set("X-Request-Id", reqID)
+	}
 
 	return ccReq, nil
 }

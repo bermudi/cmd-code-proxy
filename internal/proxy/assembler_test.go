@@ -163,7 +163,7 @@ func TestStreamAssembler_ContextCancelStopsLoop(t *testing.T) {
 	cancel() // cancel before Run starts; no events should be emitted.
 
 	rec := httptest.NewRecorder()
-	a := NewStreamAssembler(&Proxy{Debug: false}, rec, rec, "id", "m", time.Now().Unix())
+	a := NewStreamAssembler(ctx, &Proxy{}, rec, rec, "id", "m", time.Now().Unix())
 	_ = a.Run(ctx, pr)
 
 	if rec.Body.Len() != 0 {
@@ -336,7 +336,7 @@ func feedStream(t *testing.T, lines []string) streamRun {
 	t.Helper()
 	body := io.NopCloser(strings.NewReader(strings.Join(lines, "\n")))
 	rec := httptest.NewRecorder()
-	a := NewStreamAssembler(&Proxy{Debug: false}, rec, rec, "chatcmpl-test", "m", time.Now().Unix())
+	a := NewStreamAssembler(context.Background(), &Proxy{}, rec, rec, "chatcmpl-test", "m", time.Now().Unix())
 	if err := a.Run(context.Background(), body); err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -348,7 +348,7 @@ func feedFinal(t *testing.T, lines []string) api.OpenAIChatResponse {
 	t.Helper()
 	body := io.NopCloser(strings.NewReader(strings.Join(lines, "\n")))
 	rec := httptest.NewRecorder()
-	a := NewFinalAssembler(&Proxy{Debug: false}, rec, "chatcmpl-test", "m", time.Now().Unix())
+	a := NewFinalAssembler(context.Background(), &Proxy{}, rec, "chatcmpl-test", "m", time.Now().Unix())
 	if err := a.Run(context.Background(), body); err != nil {
 		t.Fatalf("Run: %v", err)
 	}

@@ -25,13 +25,12 @@ The goal of this phase is to make the proxy's behavior *measurable* and *debugga
 - **Success criteria:** Three real-stream fixtures exist, each asserts the response renders correctly for an OpenAI client. The parity harness accepts fixture files (currently fixtures are inline strings; this is also a small harness improvement).
 - **Depends on:** the user actually running a few real upstream calls and saving the streams. The harness is ready for this; the inputs are not.
 
-### 1.2 Request ID end-to-end
+### 1.2 Request ID end-to-end ✅
 
-- **What:** Generate a `X-Request-Id` on the inbound HTTP request (or honor one from the client, including the OpenAI `client_request_id` field), thread it through `BuildCCRequest` → upstream call → assembler → log lines.
-- **Why:** The current logs are timestamped but not request-correlated. When the proxy returns a wrong answer or hangs, the only way to find the matching upstream call is to read timestamps. A single ID threaded through the whole lifecycle turns "what happened to this request" from a 5-minute grep into a 5-second grep.
-- **Effort:** 2–3 hours.
-- **Success criteria:** Every log line in the request lifecycle carries the same request ID. The ID appears in the upstream `x-request-id` (or equivalent) header. `TestHandleChatCompletions_*` tests assert the ID propagates.
-- **Depends on:** nothing.
+- **What:** Generate a `X-Request-Id` on the inbound HTTP request (or honor one from the client), thread it through `BuildCCRequest` → upstream call → assembler → log lines. Also set it as a response header on every endpoint.
+- **Why:** The old logs were timestamped but not request-correlated. A single ID threaded through the whole lifecycle turns "what happened to this request" from a 5-minute grep into a 5-second grep.
+- **Done:** 2026-06-08. `RequestLoggingMiddleware` in `logging.go` generates the ID, stores it in `context.Context`, and logs start/end with method/path/status/duration. The handler reads it from context and forwards it to upstream as `x-request-id`. `TestHandleChatCompletions_*` tests assert capture works (§1.2 extended to capture the request body too).
+- **Commit:** `0b4d3c7` (batch: slog + request ID + capture + Flusher fix)
 
 ### 1.3 Surface upstream streaming errors to the client
 
@@ -61,13 +60,12 @@ The goal of this phase is to make the proxy pleasant to *operate* (deploy, debug
 - **Success criteria:** A regression-bait PR is run locally (not merged), the parity test fails loudly with a clear diff, and the bait is reverted. Document the result in a comment in `paritytest/parity_test.go` so future maintainers know the test was last verified on 2026-06-05 or later.
 - **Depends on:** the parity harness being mature enough that the failure mode is recognizable. (It is — I verified it during the refactor.)
 
-### 2.2 Structured logging (slog)
+### 2.2 Structured logging (slog) ✅
 
-- **What:** Replace `log.Printf` calls with `slog` (stdlib, Go 1.21+). Move from plain strings to key-value pairs.
-- **Why:** The current logs are human-readable but machine-hostile. `slog` + `slog.SetDefault(slog.NewJSONHandler(...))` is one line away from being `jq`-able. This is the prerequisite for any meaningful observability work (request IDs become useful only if the surrounding log lines are structured).
-- **Effort:** ~1 day.
-- **Success criteria:** Every existing `log.Printf` call has been replaced. The default handler can be switched between text and JSON via an env var. `TestHandleChatCompletions_*` tests assert on log output.
-- **Depends on:** 1.2 (request IDs) is more useful with structured logging around them.
+- **What:** Replace all `log.Printf` calls with `slog` (stdlib). Default handler: text (human-readable). `PROXY_LOG_JSON=1` flips to JSON. Added `-debug` flag for debug level.
+- **Why:** Machine-hostile logs are fine for interactive use, but `jq`-able JSON is necessary for any debugging session that involves more than one request.
+- **Done:** 2026-06-08. `logging.go` provides `reqInfo`/`reqWarn`/`reqError`/`reqDebug` wrappers that pull request ID and attrs (model, stream, working_dir) from context. No `log.Printf` remains in production code.
+- **Commit:** `0b4d3c7` (batch: slog + request ID + capture + Flusher fix)
 
 ### 2.3 Make the personal-use boundary visible
 
