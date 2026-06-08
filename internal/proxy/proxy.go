@@ -161,7 +161,12 @@ func BuildCCRequest(openAIReq api.OpenAIChatRequest) (api.CCRequestBody, error) 
 // callers to override the CLI-compatible working directory sent upstream.
 func BuildCCRequestWithWorkingDir(openAIReq api.OpenAIChatRequest, workingDirOverride string) (api.CCRequestBody, error) {
 	model := MapModel(openAIReq.Model)
-	ccMessages := ConvertMessages(openAIReq.Messages)
+	// Drop system/developer messages. CommandCode's gateway builds the
+	// system prompt server-side from config.workingDir (it reads the
+	// project's AGENTS.md, skills, etc. from disk). Forwarding the OpenAI
+	// system message as a user turn causes the model to treat it as an
+	// environment announcement and hallucinate an acknowledgement.
+	ccMessages := ConvertMessages(DropSystemMessages(openAIReq.Messages))
 	workingDir := currentWorkingDir()
 	if workingDirOverride != "" {
 		workingDir = workingDirOverride
@@ -254,6 +259,16 @@ func (p *Proxy) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	ccBody, err := BuildCCRequestWithWorkingDir(openAIReq, workingDir)
 	if err != nil {
 		p.writeOpenAIError(w, http.StatusInternalServerError, "Failed to build request", "server_error")
+		return
+	}
+	// BuildCCRequestWithWorkingDir drops system/developer messages before
+	// converting. If every input message was system, we'd forward an
+	// empty messages array to CommandCode and the gateway would 400 with
+	// an opaque error. 400 here with a useful message instead.
+	if len(ccBody.Params.Messages) == 0 {
+		p.writeOpenAIError(w, http.StatusBadRequest,
+			"no user/assistant/tool messages in request after dropping system content",
+			"invalid_request_error")
 		return
 	}
 

@@ -66,38 +66,35 @@ func TestConvertMessages_AssistantWithToolCalls(t *testing.T) {
 	}
 }
 
-func TestExtractSystem(t *testing.T) {
+func TestDropSystemMessages(t *testing.T) {
 	msgs := []api.OpenAIMessage{
 		{Role: "system", Content: "You are helpful."},
 		{Role: "user", Content: "Hi"},
-		{Role: "system", Content: "Be concise."},
+		{Role: "developer", Content: "Be concise."},
+		{Role: "assistant", Content: "Hello"},
+		{Role: "tool", Content: "result"},
+		{Role: "user", Content: "Bye"},
 	}
-	sys, rest := ExtractSystem(msgs)
-	if sys != "You are helpful.\nBe concise." {
-		t.Errorf("system = %q, want concatenated", sys)
+	got := DropSystemMessages(msgs)
+	if len(got) != 4 {
+		t.Fatalf("len = %d, want 4 (system+developer dropped)", len(got))
 	}
-	if len(rest) != 1 {
-		t.Fatalf("expected 1 remaining message, got %d", len(rest))
-	}
-	if rest[0].Role != "user" {
-		t.Errorf("rest[0].Role = %q, want user", rest[0].Role)
+	wantRoles := []string{"user", "assistant", "tool", "user"}
+	for i, m := range got {
+		if m.Role != wantRoles[i] {
+			t.Errorf("got[%d].Role = %q, want %q", i, m.Role, wantRoles[i])
+		}
 	}
 }
 
-func TestExtractSystem_DeveloperRole(t *testing.T) {
+func TestDropSystemMessages_AllSystem(t *testing.T) {
 	msgs := []api.OpenAIMessage{
-		{Role: "developer", Content: "You are an expert."},
-		{Role: "user", Content: "Hello"},
+		{Role: "system", Content: "a"},
+		{Role: "developer", Content: "b"},
 	}
-	sys, rest := ExtractSystem(msgs)
-	if sys != "You are an expert." {
-		t.Errorf("system = %q, want 'You are an expert.'", sys)
-	}
-	if len(rest) != 1 {
-		t.Fatalf("expected 1 remaining message, got %d", len(rest))
-	}
-	if rest[0].Role != "user" {
-		t.Errorf("rest[0].Role = %q, want user", rest[0].Role)
+	got := DropSystemMessages(msgs)
+	if len(got) != 0 {
+		t.Errorf("len = %d, want 0", len(got))
 	}
 }
 
@@ -106,17 +103,44 @@ func TestNormalizeRole(t *testing.T) {
 		{"user", "user"},
 		{"assistant", "assistant"},
 		{"tool", "tool"},
-		{"developer", "user"},
-		{"system", "user"},
-		{"function", "user"},
-		{"", "user"},
-		{"unknown", "user"},
+		// Anything else is a programmer error — DropSystemMessages should
+		// have stripped system/developer before this is called. We return
+		// "" so the caller (ConvertMessages) drops the message rather than
+		// forwarding a bogus role upstream.
+		{"system", ""},
+		{"developer", ""},
+		{"function", ""},
+		{"", ""},
+		{"unknown", ""},
 	}
 	for _, c := range cases {
 		got := normalizeRole(c.in)
 		if got != c.want {
 			t.Errorf("normalizeRole(%q) = %q, want %q", c.in, got, c.want)
 		}
+	}
+}
+
+// TestConvertMessages_DropsInvalidRoles is a belt-and-suspenders check:
+// if a non-CC-valid role ever reaches ConvertMessages, the message is
+// dropped (not rewritten to "user" and forwarded as the AGENTS.md-leak
+// bug).
+func TestConvertMessages_DropsInvalidRoles(t *testing.T) {
+	msgs := []api.OpenAIMessage{
+		{Role: "system", Content: "leak attempt"},
+		{Role: "user", Content: "hello"},
+		{Role: "function", Content: "another leak"},
+		{Role: "assistant", Content: "hi back"},
+	}
+	ccMsgs := ConvertMessages(msgs)
+	if len(ccMsgs) != 2 {
+		t.Fatalf("len = %d, want 2 (system + function dropped, user + assistant kept)", len(ccMsgs))
+	}
+	if ccMsgs[0].Role != "user" {
+		t.Errorf("ccMsgs[0].Role = %q, want user", ccMsgs[0].Role)
+	}
+	if ccMsgs[1].Role != "assistant" {
+		t.Errorf("ccMsgs[1].Role = %q, want assistant", ccMsgs[1].Role)
 	}
 }
 

@@ -249,6 +249,26 @@ func TestHandleChatCompletions_EmptyMessages(t *testing.T) {
 	}
 }
 
+// TestHandleChatCompletions_AllSystemMessages — a request whose only
+// message is a system turn passes the empty-input check (length is 1)
+// but produces 0 messages after DropSystemMessages. The proxy must 400
+// here rather than forwarding an empty messages array to CommandCode.
+func TestHandleChatCompletions_AllSystemMessages(t *testing.T) {
+	p := NewProxy("key", &fakeUpstream{})
+	body := `{"model":"test-model","messages":[{"role":"system","content":"just a system message"}]}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	rec := httptest.NewRecorder()
+
+	p.HandleChatCompletions(rec, req)
+
+	if rec.Code != http.StatusBadRequest {
+		t.Errorf("expected 400 for all-system request, got %d", rec.Code)
+	}
+	if !strings.Contains(rec.Body.String(), "no user/assistant/tool messages") {
+		t.Errorf("expected explanatory 400 body, got %q", rec.Body.String())
+	}
+}
+
 func TestHandleModels_WithFakeUpstream(t *testing.T) {
 	models := []api.OpenAIModel{
 		{ID: "deepseek/deepseek-v4-pro", Object: "model", OwnedBy: "deepseek"},

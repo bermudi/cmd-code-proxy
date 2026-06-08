@@ -8,12 +8,44 @@ import (
 	"github.com/bermudi/cmd-code-proxy/internal/api"
 )
 
+// DropSystemMessages returns a copy of msgs with every system or developer
+// message removed.
+//
+// CommandCode's /alpha/generate expects params.messages to contain only
+// user/assistant/tool turns. The real command-code CLI binary never sends
+// system content in the request body — CommandCode's gateway builds the
+// system prompt server-side from config.workingDir (it reads AGENTS.md and
+// related project context from the project itself). Clients that forward
+// system messages from upstream (pi's harness bakes the project AGENTS.md
+// into the OpenAI system message) must drop them, otherwise the model sees
+// a fake "user" turn that looks like an environment announcement and
+// hallucinates an acknowledgement. See convert_test.go and paritytest/ for
+// the contract.
+func DropSystemMessages(msgs []api.OpenAIMessage) []api.OpenAIMessage {
+	out := make([]api.OpenAIMessage, 0, len(msgs))
+	for _, m := range msgs {
+		if m.Role == "system" || m.Role == "developer" {
+			continue
+		}
+		out = append(out, m)
+	}
+	return out
+}
+
 // Convert OpenAI messages to CommandCode format
 func ConvertMessages(openAIMsgs []api.OpenAIMessage) []api.CCMessage {
 	var ccMsgs []api.CCMessage
 	toolNames := map[string]string{}
 
 	for _, m := range openAIMsgs {
+		role := normalizeRole(m.Role)
+		if role == "" {
+			// normalizeRole returned "" — a non-CC-valid role slipped
+			// past DropSystemMessages. Don't forward it; CommandCode's
+			// gateway would 400 anyway, and silently rewriting to "user"
+			// is the original AGENTS.md-leak bug.
+			continue
+		}
 		for _, tc := range m.ToolCalls {
 			if tc.ID != "" && tc.Function.Name != "" {
 				toolNames[tc.ID] = tc.Function.Name
@@ -76,11 +108,11 @@ func ConvertMessages(openAIMsgs []api.OpenAIMessage) []api.CCMessage {
 				})
 				addedTools[tc.ID] = true
 			}
-			ccMsgs = append(ccMsgs, api.CCMessage{Role: normalizeRole(m.Role), Content: contentParts})
+			ccMsgs = append(ccMsgs, api.CCMessage{Role: role, Content: contentParts})
 			continue
 		}
 
-		ccMsgs = append(ccMsgs, api.CCMessage{Role: normalizeRole(m.Role), Content: parseContent(m.Content, toolNames)})
+		ccMsgs = append(ccMsgs, api.CCMessage{Role: role, Content: parseContent(m.Content, toolNames)})
 	}
 	return ccMsgs
 }
@@ -348,35 +380,21 @@ func parseContent(content interface{}, toolNames map[string]string) []api.CCCont
 	}
 }
 
-// Extract system message and remaining messages
-// Also extracts "developer" role (OpenAI's replacement for "system" in newer APIs).
-func ExtractSystem(msgs []api.OpenAIMessage) (string, []api.OpenAIMessage) {
-	var system strings.Builder
-	var rest []api.OpenAIMessage
-	for _, m := range msgs {
-		if m.Role == "system" || m.Role == "developer" {
-			if system.Len() > 0 {
-				system.WriteString("\n")
-			}
-			system.WriteString(contentToString(m.Content))
-		} else {
-			rest = append(rest, m)
-		}
-	}
-	return system.String(), rest
-}
-
 // normalizeRole maps OpenAI role names to CommandCode-valid roles.
-// CC accepts: "user" | "assistant" | "tool"
+// CC accepts: "user" | "assistant" | "tool".
+//
+// System and developer messages must be dropped by DropSystemMessages
+// before this is called. If a non-CC-valid role reaches here, that's
+// a programmer error in the proxy itself — the only safe responses are
+// to panic (loud) or to emit an empty string and let the upstream
+// gateway 400 (also loud, but at the right layer). We choose the empty
+// string. ConvertMessages must never be called with a slice that still
+// contains system/developer turns.
 func normalizeRole(role string) string {
 	switch role {
 	case "user", "assistant", "tool":
 		return role
-	case "developer", "system":
-		// These are extracted by ExtractSystem before ConvertMessages runs,
-		// but guard against them leaking through.
-		return "user"
 	default:
-		return "user"
+		return ""
 	}
 }
