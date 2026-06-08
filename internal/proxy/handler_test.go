@@ -371,8 +371,8 @@ func TestBuildCCRequest_Defaults(t *testing.T) {
 	if ccBody.Skills != "" {
 		t.Errorf("skills = %q, want empty string", ccBody.Skills)
 	}
-	if ccBody.ThreadID != nil {
-		t.Errorf("threadId = %v, want nil", ccBody.ThreadID)
+	if ccBody.ThreadID == nil || *ccBody.ThreadID == "" {
+		t.Errorf("threadId = %v, want generated UUID", ccBody.ThreadID)
 	}
 	// Without client config, falls back to populateConfigFromFS — which impersonates command-code
 	if !strings.Contains(ccBody.Config.Environment, "Node.js") {

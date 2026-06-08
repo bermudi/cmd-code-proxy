@@ -322,7 +322,10 @@ These fields are read from the live filesystem if the pi extension does not send
 **Other request fields:**
 - `permissionMode` — `"auto-accept"`
 - `params.stream` — always `true` upstream
-- `memory`/`taste` — `null`
+- `threadId` — UUID generated per request (session continuity with CommandCode)
+- `memory` — AGENTS.md content from the project (sent by the pi extension)
+- `skills` — XML from `.agents/skills/` or `.pi/skills/` or `.commandcode/skills/` (sent by the pi extension)
+- `taste` — `.commandcode/taste/taste.md` if it exists (sent by the pi extension, usually null)
 
 ## CommandCode version header
 

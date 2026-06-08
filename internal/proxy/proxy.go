@@ -5,6 +5,7 @@ import (
 	"os"
 
 	"github.com/bermudi/cmd-code-proxy/internal/api"
+	"github.com/google/uuid"
 )
 
 const debugLogLimit = 20000
@@ -85,7 +86,29 @@ func BuildCCRequestWithWorkingDir(openAIReq api.OpenAIChatRequest, workingDirOve
 			MaxTokens: maxTokens,
 			Stream:    true,
 		},
+		ThreadID: newThreadID(),
+	}
+
+	// Forward memory/skills/taste from the pi extension if provided.
+	// The gateway builds these from disk if absent, but the extension
+	// has the real files and can send them directly.
+	if openAIReq.XCommandCodeMemory != "" {
+		ccBody.Memory = openAIReq.XCommandCodeMemory
+	}
+	if openAIReq.XCommandCodeSkills != "" {
+		ccBody.Skills = openAIReq.XCommandCodeSkills
+	}
+	if openAIReq.XCommandCodeTaste != "" {
+		ccBody.Taste = openAIReq.XCommandCodeTaste
 	}
 
 	return ccBody, nil
+}
+
+// newThreadID generates a UUID for CommandCode session continuity.
+// The proxy generates one per request because the OpenAI API does not
+// expose a session identifier that persists across turns.
+func newThreadID() *string {
+	s := uuid.New().String()
+	return &s
 }

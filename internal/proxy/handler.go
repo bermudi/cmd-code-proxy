@@ -271,6 +271,10 @@ func responsesToChatRequest(req api.OpenAIResponsesRequest) api.OpenAIChatReques
 		TopP:                     req.TopP,
 		User:                     req.User,
 		XCommandCodeWorkingDir:   req.XCommandCodeWorkingDir,
+		XCommandCodeConfig:       req.XCommandCodeConfig,
+		XCommandCodeMemory:       req.XCommandCodeMemory,
+		XCommandCodeSkills:       req.XCommandCodeSkills,
+		XCommandCodeTaste:        req.XCommandCodeTaste,
 	}
 }
 
