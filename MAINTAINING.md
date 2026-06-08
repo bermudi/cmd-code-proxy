@@ -47,7 +47,7 @@ Multi-turn: repeat the `command-code` call; each `-p` is a new session (new `thr
 
 **The gateway builds the system prompt server-side.** Across every capture, `params.messages[]` contains only `user | assistant | tool` — never `system`, never `developer`. The binary sends `config.workingDir` and the gateway reads the project's AGENTS.md, skills, etc. from disk itself.
 
-This means the proxy must **drop** all system/developer messages from the OpenAI request before forwarding. If they leak through (even rewritten to `role: "user"`), the model sees the AGENTS.md content as a user turn and gets confused — MiniMax-M3 produced "Working directory: `/home/daniel/build/<project>`. Ready for your next request." hallucinations when the old `normalizeRole` rewrite turned `system → user`.
+This means the proxy must **drop** all system/developer messages from the OpenAI request before forwarding. If they leak through (even rewritten to `role: "user"`), the model sees the AGENTS.md content as a user turn and responds to it as an environment announcement — MiniMax-M3 reasonably produced "Working directory: `/home/daniel/build/<project>`. Ready for your next request." acks when the old `normalizeRole` rewrite turned `system → user`. Not a hallucination; the model was correctly interpreting malformed input.
 
 The drop happens in `convert.go:DropSystemMessages`, called before `ConvertMessages` in `BuildCCRequestWithWorkingDir`. If all messages are system, the handler returns a 400 with a useful message.
 
@@ -71,7 +71,7 @@ The binary sends a `config` struct with fields the gateway uses for routing and 
 
 **`workingDir` is sent in every request, not just the first.** Verified across 4 separate `command-code` runs in the same project — all carried the full `config` block including `workingDir`. Each `-p` run is a new session (new `threadId`) but sends the same `config`.
 
-**The gateway uses these fields to build the server-side system prompt.** MiniMax-M3 hallucinated "automated environment update" responses when the proxy sent stub values (empty `structure`, `isGitRepo: false`, `"Go proxy"` environment). Populating the fields from the live filesystem fixed the hallucination. See § Reverse-engineered binary behavior below for the exact logic the real binary uses.
+**The gateway uses these fields to build the server-side system prompt.** MiniMax-M3 was distracted by stub config values (empty `structure`, `isGitRepo: false`, `"Go proxy"` environment) — the gateway's server-side prompt looked like a generic environment announcement, so the model reasonably responded with "automated environment update" acks. It was not hallucinating, just interpreting the bad input correctly. Populating the fields from the live filesystem fixed the distraction. See § Reverse-engineered binary behavior below for the exact logic the real binary uses.
 
 ### Reverse-engineered binary behavior (`dist/index.mjs`, v0.32.2)
 
@@ -212,7 +212,7 @@ In addition to the response-side parity test, `paritytest/cmdcode_shape_test.go`
 
 - `TestCommandCodeShape_NoSystemRoleInMessages` — reads the most recent capture from `../cmd-recorder/captures/` and asserts no `system`/`developer` role appears in `params.messages[]`. Skip-not-fail if the recorder dir is absent.
 - `TestProxyRequestShape_DropsSystemMessages` — feeds a pi-shaped OpenAI request (5 messages, 2 system) into `BuildCCRequest`; asserts 3 messages survive and none are system/developer.
-- `TestProxyRequestShape_NoAgentsMDLeakage` — no message body opens with `# AGENTS.md` or `# Project-specific instructions`. This is the visible symptom guard — it catches the specific failure mode that caused MiniMax-M3 hallucinations.
+- `TestProxyRequestShape_NoAgentsMDLeakage` — no message body opens with `# AGENTS.md` or `# Project-specific instructions`. This is the visible symptom guard — it catches the specific failure mode that caused MiniMax-M3 to interpret malformed input as an environment announcement.
 - `TestProxyRequestShape_ConfigWorkingDirSet` — `Config.WorkingDir` is non-empty.
 
 These tests were verified to catch the regression: temporarily reverting `DropSystemMessages` causes the leakage tests to fail with the exact symptoms (`len(messages) = 5, want 3` and a user turn containing the AGENTS.md header).

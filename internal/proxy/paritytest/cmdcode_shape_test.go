@@ -11,7 +11,8 @@
 //     from config.workingDir. If the proxy forwards the OpenAI system
 //     message (e.g. pi's harness, which bakes the project AGENTS.md into
 //     the system message), the model sees a fake "user" turn that looks
-//     like an environment announcement and hallucinates an
+//     like an environment announcement and responds accordingly — it's correctly
+//     interpreting malformed input, not hallucinating.
 //     acknowledgement — the "Working directory: … Ready for your next
 //     request." pattern.
 //

@@ -64,7 +64,8 @@ func BuildCCRequestWithWorkingDir(openAIReq api.OpenAIChatRequest, workingDirOve
 	// system prompt server-side from config.workingDir (it reads the
 	// project's AGENTS.md, skills, etc. from disk). Forwarding the OpenAI
 	// system message as a user turn causes the model to treat it as an
-	// environment announcement and hallucinate an acknowledgement.
+	// environment announcement and respond accordingly — it's correctly
+	// interpreting malformed input, not hallucinating.
 	ccMessages := ConvertMessages(DropSystemMessages(openAIReq.Messages))
 	workingDir := currentWorkingDir()
 	if workingDirOverride != "" {

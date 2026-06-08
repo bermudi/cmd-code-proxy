@@ -87,10 +87,10 @@ The goal of this phase is to make the proxy pleasant to *operate* (deploy, debug
   - `mainBranch`: `git branch -r` parse (origin/main → main, origin/master → master, fallback main).
   - `gitStatus`: summarized porcelain (`M N, A N, D N, ?? N` or `"Working tree clean"`).
   - `recentCommits`: `git log --oneline -3`.
-- **Why:** Verified by live capture and reverse-engineering `dist/index.mjs` (v0.32.2). The stub values caused MiniMax-M3 to hallucinate "automated environment update" responses. Populating the fields fixed it.
-- **Status:** Working. All tests pass. Smoke test confirms no more hallucinations.
+- **Why:** Verified by live capture and reverse-engineering `dist/index.mjs` (v0.32.2). The stub values caused MiniMax-M3 to be distracted by malformed input that looked like an environment announcement — the model was correctly interpreting bad data, not hallucinating. Populating the fields fixed the distraction.
+- **Status:** Working. All tests pass. Smoke test confirms model responds to actual user intent.
 - **Caveat:** This is a **local-deployment stopgap**. The proxy shells out to `git` and reads the project directory using the `workingDir` header — it works because both processes are on the same machine. The correct architecture is § 2.8 (pi extension sends this data).
-- **Success criteria:** Model stops producing "environment update" hallucinations on greetings. ✓
+- **Success criteria:** Model stops producing "environment update" acks on greetings. ✓
 - **Depends on:** `x_command_code_working_dir` header from cc-cwd extension.
 
 ### 2.6 Evaluate `cc-cwd` pi extension

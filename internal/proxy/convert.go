@@ -19,8 +19,8 @@ import (
 // system messages from upstream (pi's harness bakes the project AGENTS.md
 // into the OpenAI system message) must drop them, otherwise the model sees
 // a fake "user" turn that looks like an environment announcement and
-// hallucinates an acknowledgement. See convert_test.go and paritytest/ for
-// the contract.
+// responds accordingly — it's correctly interpreting malformed input, not
+// hallucinating. See convert_test.go and paritytest/ for the coverage.
 func DropSystemMessages(msgs []api.OpenAIMessage) []api.OpenAIMessage {
 	out := make([]api.OpenAIMessage, 0, len(msgs))
 	for _, m := range msgs {
