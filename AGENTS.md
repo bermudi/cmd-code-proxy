@@ -20,6 +20,21 @@ OpenAI client → localhost:55990/v1/chat/completions (OpenAI format)
               api.commandcode.ai/alpha/generate (NDJSON, content-parts format)
 ```
 
+### Response pipeline (assembler.go + translator.go)
+
+The response side is a three-stage pipeline:
+
+1. **EventTranslator** (`translator.go`) — scans upstream NDJSON, yields typed `Event` structs. Normalizes `finish-step`/`finish` deduplication and usage fields.
+2. **ResponseAssembler** (`assembler.go`) — drives the translator loop, owns the `toolIndexRegistry`, dispatches each event to a `sink`.
+3. **sink** — either `streamSink` (writes SSE chunks as they arrive) or `finalSink` (buffers everything, emits one JSON body at the end).
+
+The dispatcher has zero `if streaming` branches. The only mode-specific policy is `promoteOrphans` (streaming promotes orphan `tool-input-delta` events to fresh slots; final drops them).
+
+### Request pipeline (proxy.go + convert.go + adapter.go)
+
+- `HandleChatCompletions` → `BuildCCRequestWithWorkingDir` → `DropSystemMessages` → `ConvertMessages` → `ConvertTools`
+- `Upstream` interface (`adapter.go`) — real `ccAdapter` calls CommandCode with retries; tests inject `fakeUpstream`.
+
 ### The proxy has no project context
 The proxy process runs in its own checkout directory
 (`/home/daniel/build/command-code-proxy-server`). It does **not** run in
@@ -46,6 +61,8 @@ Three non-obvious decisions:
 - **CommandCode's gateway builds the system prompt server-side.** The real `command-code` binary never sends system content in `params.messages[]` — only `user | assistant | tool`. The gateway reads the project's AGENTS.md, skills, etc. from disk using `config.workingDir`. The proxy must drop all system/developer messages before forwarding; the gateway reconstructs them. See MAINTAINING.md § CommandCode gateway protocol for the full protocol notes.
 
 ## Conventions
+
+- **MiniMax-M3 hallucination pattern (confirmed fixed):** Sending stub `config` fields (`isGitRepo: false`, empty `structure`, `"Go proxy"` environment) caused the gateway's server-side system prompt to look like a generic environment announcement. MiniMax-M3 treated short greetings as system state and responded with "automated environment update" acks. Fix: populate `config` with real project data (now from the pi extension via `x_command_code_config`, with `populateConfigFromFS` as fallback). Confirmed by smoke test 2026-06-08: model responds cleanly to greetings.
 - **All upstream requests use `stream: true`.** Non-streaming client mode buffers NDJSON and assembles a final response. Do not "optimize" by setting stream=false on non-streaming requests.
 - **System/developer messages are dropped before forwarding.** The gateway builds the system prompt server-side from `config.workingDir`. If every input message is system, the proxy 400s instead of forwarding an empty message list. See MAINTAINING.md § CommandCode gateway protocol for the full protocol notes.
 - **Tool results whose content starts with `Error:` get `type: "error-text"`.** Stable data contract; do not "fix" this.
