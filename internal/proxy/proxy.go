@@ -205,8 +205,6 @@ func BuildCCRequestWithWorkingDir(openAIReq api.OpenAIChatRequest, workingDirOve
 	  // PATCH: Force empty array on final CC payload instead of null
     for i := range ccBody.Params.Messages {
         if ccBody.Params.Messages[i].Content == nil {
-            // An empty slice in Go marshals to `[]` in JSON, 
-            // fixing the "expected array, received null" 400 error.
             ccBody.Params.Messages[i].Content = []api.CCContentPart{}
         }
     }
