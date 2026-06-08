@@ -287,6 +287,21 @@ chatcmpl-xxx-*.ndjson       ← raw upstream response (if upstream responds)
 ```
 The request is captured before the upstream call, so it exists even on 401s or transport errors.
 
+**Diff against real binary** — `scripts/diff-captures.sh` compares proxy captures against real `command-code` binary captures from `cmd-recorder`:
+```bash
+# Capture from the proxy
+./bin/command-code-proxy -capture-dir ./proxy-captures
+
+# Capture from the real binary (see MAINTAINING.md)
+cd /path/to/project
+COMMANDCODE_SANDBOX=true COMMANDCODE_API_URL=http://127.0.0.1:9090 \
+  command-code --skip-onboarding -p "hello"
+
+# Diff
+./scripts/diff-captures.sh ./proxy-captures ../cmd-recorder/captures
+```
+The script normalizes both captures with `jq -S` and runs unified diff. Known expected differences (memory, taste, skills, threadId) are called out in the summary.
+
 ## CommandCode request context
 
 The proxy impersonates the real `command-code` binary. The upstream request includes:
