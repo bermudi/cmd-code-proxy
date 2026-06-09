@@ -245,21 +245,30 @@ Unknown model names are passed through unchanged.
 ├── go.mod
 ├── go.sum
 ├── main.go
+├── scripts
+│   └── diff-captures.sh  # diff proxy captures against real binary captures
 └── internal
     ├── api
     │   ├── commandcode.go
     │   └── openai.go
     ├── proxy
-    │   ├── assembler.go         # response-side dispatcher (stream + non-stream)
-    │   ├── assembler_test.go    # per-event-class unit tests
-    │   ├── convert.go           # OpenAI ↔ CommandCode message/tool format
+    │   ├── adapter.go         # real CommandCode API client
+    │   ├── assembler.go       # response-side dispatcher (stream + non-stream)
+    │   ├── assembler_test.go  # per-event-class unit tests
+    │   ├── config.go          # config FS population + porcelain parser
+    │   ├── convert.go         # OpenAI ↔ CommandCode message/tool format
     │   ├── convert_test.go
+    │   ├── handler.go         # per-endpoint HTTP handlers
+    │   ├── handler_test.go    # end-to-end HTTP tests
+    │   ├── logging.go         # slog + request-scoped logging middleware
     │   ├── model.go
     │   ├── model_test.go
-    │   ├── proxy.go             # HTTP routes, request handling
-    │   ├── translator.go        # NDJSON event decoder
-    │   ├── handler_test.go      # end-to-end HTTP tests
-    │   └── paritytest/          # vendored pre-refactor code + parity harness
+    │   ├── proxy.go           # Proxy struct + request body builder
+    │   ├── router.go          # route registration + middleware
+    │   ├── translator.go      # NDJSON event decoder
+    │   ├── config_test.go     # config FS + porcelain tests
+    │   ├── adapter_test.go    # adapter retry + backoff tests
+    │   └── paritytest/        # vendored pre-refactor code + parity harness
     └── version
         └── version.go
 ```
