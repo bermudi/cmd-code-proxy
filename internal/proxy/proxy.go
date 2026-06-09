@@ -31,7 +31,25 @@ type Proxy struct {
 	ListClosedModels bool
 	CaptureDir       string // if non-empty, tee upstream NDJSON to <CaptureDir>/<requestID>.ndjson
 	WorkingDir       string // if non-empty, overrides the process working directory sent to CommandCode
+	// TasteLearning is the proxy-wide default for the upstream x-taste-learning
+	// header. nil = use binary default (true). The per-request
+	// x_command_code_taste_learning field from the client (typically the pi
+	// extension, which reads userConfig.tasteLearning) wins when present.
+	TasteLearning *bool
 	upstream         Upstream
+}
+
+// ResolveTasteLearning picks the effective value with the precedence:
+// per-request override (from x_command_code_taste_learning) > proxy default
+// (from -taste-learning) > binary default (true).
+func ResolveTasteLearning(perRequest *bool, proxyDefault *bool) bool {
+	if perRequest != nil {
+		return *perRequest
+	}
+	if proxyDefault != nil {
+		return *proxyDefault
+	}
+	return true
 }
 
 // NewProxy creates a new proxy with the given upstream adapter.

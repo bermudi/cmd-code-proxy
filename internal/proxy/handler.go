@@ -111,6 +111,10 @@ func (p *Proxy) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 		workingDir = p.WorkingDir
 	}
 
+	// Resolve taste-learning preference: per-request field > proxy default > true.
+	// See MAINTAINING.md § Taste learning for why the proxy doesn't just hardcode "true".
+	tasteLearning := ResolveTasteLearning(openAIReq.XCommandCodeTasteLearning, p.TasteLearning)
+
 	// Build CommandCode request
 	ccBody, err := BuildCCRequestWithWorkingDir(openAIReq, workingDir)
 	if err != nil {
@@ -154,7 +158,7 @@ func (p *Proxy) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Call upstream
-	respBody, err := p.upstream.Generate(ctx, ccBody, apiKey)
+	respBody, err := p.upstream.Generate(ctx, ccBody, apiKey, tasteLearning)
 	if err != nil {
 		var ue *UpstreamError
 		if errors.As(err, &ue) {

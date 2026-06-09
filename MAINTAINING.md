@@ -133,7 +133,7 @@ These were the three root causes of the MiniMax-M3 distraction and are **confirm
 | `temperature` absent (matches `callServerAPI`) | ✓ correct | — |
 | `permissionMode` sent (matches `callServerAPI`) | ✓ correct | — |
 | `x-cli-environment`, `x-project-slug`, `x-co-flag` headers | ✓ sent | values match what the binary sends for API-key auth |
-| `x-taste-learning: "true"` | ✗ **hardcoded** | should reflect `userConfig.tasteLearning`; see § Taste learning |
+| `x-taste-learning: <resolved value>` | ✓ resolved | `XCommandCodeTasteLearning` (per-request) > `-taste-learning` flag > `true` default. See § Taste learning. |
 | `x-session-id` | ✗ **not sent** | binary sends the session UUID as a header; proxy uses `threadId` in body only |
 
 ### Reverse-engineered binary behavior (`dist/index.mjs`, v0.33.1)
@@ -302,7 +302,12 @@ The user toggles this in the TUI: `/taste` in interactive mode, or the "Taste Le
 
 **Practical impact of the proxy's hardcoded `"true"`:** The proxy lies about the user's preference. If the user's `command-code` has taste learning **off**, the gateway still sees `x-taste-learning: "true"`. We don't know if the gateway uses this for routing/model selection (the captures don't disambiguate), but it's a real wire-format divergence that contradicts what a fresh `command-code` install with the same user config would send.
 
-**Fix direction:** Make the value configurable. The cleanest path is for the pi extension to read the user's `command-code` config (`~/.commandcode/config.json` or wherever `userConfig.tasteLearning` is persisted) and forward it as `x_command_code_taste_learning`, with a `-taste-learning` CLI flag as a manual override. Default: `true` (the binary's default for unset config) for backward compat.
+**Resolution (2026-06-08):** The header is now resolved with explicit precedence:
+1. `x_command_code_taste_learning` field on the OpenAI request (per-request, set by the pi extension)
+2. `-taste-learning` CLI flag on the proxy (proxy-wide default, default `true` for backward compat)
+3. `true` (the binary's default for unset config)
+
+The pi `cc-cwd` extension reads `~/.commandcode/config.json` `tasteLearning` field and forwards it. `ResolveTasteLearning(perRequest, proxyDefault)` in `proxy.go` picks the right value. The `Upstream` interface gained a `tasteLearning bool` parameter on `Generate` so the resolved value reaches the adapter per-request.
 
 #### `x-co-flag` is `isOAuthEnforced()`, not a "team flag"
 

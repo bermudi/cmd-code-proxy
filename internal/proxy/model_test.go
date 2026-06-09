@@ -224,7 +224,7 @@ func TestCreateUpstreamRequest_SetsCLIHeaders(t *testing.T) {
 	}
 
 	a := &ccAdapter{baseURL: "https://example.test", versionProvider: stubProvider}
-	req, err := a.createUpstreamRequest(context.Background(), body, "test-key")
+	req, err := a.createUpstreamRequest(context.Background(), body, "test-key", true)
 	if err != nil {
 		t.Fatalf("CreateUpstreamRequest() error = %v", err)
 	}
@@ -256,5 +256,56 @@ func TestCreateUpstreamRequest_SetsCLIHeaders(t *testing.T) {
 	}
 	if raw["skills"] != "" {
 		t.Errorf("skills = %#v, want empty string", raw["skills"])
+	}
+}
+
+func TestCreateUpstreamRequest_TasteFalse(t *testing.T) {
+	tmp := t.TempDir()
+	t.Chdir(tmp)
+
+	body, err := BuildCCRequest(api.OpenAIChatRequest{
+		Model:    "deepseek-v4-flash",
+		Messages: []api.OpenAIMessage{{Role: "user", Content: "hello"}},
+	})
+	if err != nil {
+		t.Fatalf("BuildRequest() error = %v", err)
+	}
+
+	a := &ccAdapter{baseURL: "https://example.test", versionProvider: stubProvider}
+	req, err := a.createUpstreamRequest(context.Background(), body, "test-key", false)
+	if err != nil {
+		t.Fatalf("CreateUpstreamRequest() error = %v", err)
+	}
+	defer req.Body.Close()
+
+	if got := req.Header.Get("x-taste-learning"); got != "false" {
+		t.Errorf("x-taste-learning = %q, want false", got)
+	}
+}
+
+func TestResolveTasteLearning(t *testing.T) {
+	tr := true
+	fa := false
+
+	cases := []struct {
+		name         string
+		perRequest   *bool
+		proxyDefault *bool
+		want         bool
+	}{
+		{"all nil -> true (binary default)", nil, nil, true},
+		{"per-request true wins over proxy false", &tr, &fa, true},
+		{"per-request false wins over proxy true", &fa, &tr, false},
+		{"proxy true used when no per-request", nil, &tr, true},
+		{"proxy false used when no per-request", nil, &fa, false},
+		{"per-request true used when no proxy default", &tr, nil, true},
+		{"per-request false used when no proxy default", &fa, nil, false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ResolveTasteLearning(tc.perRequest, tc.proxyDefault); got != tc.want {
+				t.Errorf("got %v, want %v", got, tc.want)
+			}
+		})
 	}
 }

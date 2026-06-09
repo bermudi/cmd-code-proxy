@@ -50,7 +50,7 @@ func NewCCAdapter() *ccAdapter {
 }
 
 // Generate implements Upstream.
-func (a *ccAdapter) Generate(ctx context.Context, ccBody api.CCRequestBody, apiKey string) (io.ReadCloser, error) {
+func (a *ccAdapter) Generate(ctx context.Context, ccBody api.CCRequestBody, apiKey string, tasteLearning bool) (io.ReadCloser, error) {
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
@@ -66,7 +66,7 @@ func (a *ccAdapter) Generate(ctx context.Context, ccBody api.CCRequestBody, apiK
 			}
 		}
 
-		ccReq, err := a.createUpstreamRequest(ctx, ccBody, apiKey)
+		ccReq, err := a.createUpstreamRequest(ctx, ccBody, apiKey, tasteLearning)
 		if err != nil {
 			return nil, err
 		}
@@ -165,7 +165,7 @@ func (a *ccAdapter) FetchModels(ctx context.Context, apiKey string) ([]api.OpenA
 	return models, nil
 }
 
-func (a *ccAdapter) createUpstreamRequest(ctx context.Context, ccBody api.CCRequestBody, apiKey string) (*http.Request, error) {
+func (a *ccAdapter) createUpstreamRequest(ctx context.Context, ccBody api.CCRequestBody, apiKey string, tasteLearning bool) (*http.Request, error) {
 	reqJSON, err := json.Marshal(ccBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build request: %w", err)
@@ -174,6 +174,7 @@ func (a *ccAdapter) createUpstreamRequest(ctx context.Context, ccBody api.CCRequ
 	slog.Debug("upstream request body",
 		"request_id", RequestIDFromContext(ctx),
 		"body", truncateLog(string(reqJSON)),
+		"taste_learning", tasteLearning,
 	)
 
 	ccReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
@@ -187,7 +188,11 @@ func (a *ccAdapter) createUpstreamRequest(ctx context.Context, ccBody api.CCRequ
 	ccReq.Header.Set("x-command-code-version", a.versionProvider.Get())
 	ccReq.Header.Set("x-cli-environment", "production")
 	ccReq.Header.Set("x-project-slug", projectSlugFromPath(ccBody.Config.WorkingDir))
-	ccReq.Header.Set("x-taste-learning", "true")
+	// tasteLearning mirrors isTasteLearningEnabled() from the real binary:
+	// the user's userConfig.tasteLearning preference (default true) sent to
+	// the gateway. The pi extension forwards the user's actual value via
+	// x_command_code_taste_learning; the CLI flag sets a proxy-wide default.
+	ccReq.Header.Set("x-taste-learning", strconv.FormatBool(tasteLearning))
 	ccReq.Header.Set("x-co-flag", "false")
 	ccReq.Header.Set("Accept", "text/event-stream")
 

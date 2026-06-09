@@ -15,7 +15,11 @@ type Upstream interface {
 	// Generate calls CommandCode /alpha/generate and returns the raw response body.
 	// The caller is responsible for closing the returned ReadCloser.
 	// A non-nil *UpstreamError means the server responded with a non-200 status.
-	Generate(ctx context.Context, ccBody api.CCRequestBody, apiKey string) (io.ReadCloser, error)
+	// tasteLearning is the resolved value for the upstream x-taste-learning
+	// header (the user's preference, surfaced by isTasteLearningEnabled() in
+	// the real binary). The real adapter sets it on the request; fakes ignore
+	// it.
+	Generate(ctx context.Context, ccBody api.CCRequestBody, apiKey string, tasteLearning bool) (io.ReadCloser, error)
 
 	// FetchModels returns the available model list from upstream.
 	// Returns unfiltered results; the caller applies filtering.

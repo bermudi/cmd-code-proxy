@@ -45,7 +45,7 @@ func TestCCAdapter_Generate_Success(t *testing.T) {
 		versionProvider: stubProvider,
 	}
 
-	body, err := a.Generate(context.Background(), api.CCRequestBody{}, "test-key")
+	body, err := a.Generate(context.Background(), api.CCRequestBody{}, "test-key", true)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestCCAdapter_Generate_RetriesOn429(t *testing.T) {
 		versionProvider: stubProvider,
 	}
 
-	body, err := a.Generate(context.Background(), api.CCRequestBody{}, "key")
+	body, err := a.Generate(context.Background(), api.CCRequestBody{}, "key", true)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -109,7 +109,7 @@ func TestCCAdapter_Generate_RetriesOn5xx(t *testing.T) {
 		versionProvider: stubProvider,
 	}
 
-	body, err := a.Generate(context.Background(), api.CCRequestBody{}, "key")
+	body, err := a.Generate(context.Background(), api.CCRequestBody{}, "key", true)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}
@@ -133,7 +133,7 @@ func TestCCAdapter_Generate_ExceedsMaxRetries(t *testing.T) {
 		versionProvider: stubProvider,
 	}
 
-	_, err := a.Generate(context.Background(), api.CCRequestBody{}, "key")
+	_, err := a.Generate(context.Background(), api.CCRequestBody{}, "key", true)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -152,7 +152,7 @@ func TestCCAdapter_Generate_UpstreamErrorOn4xx(t *testing.T) {
 		versionProvider: stubProvider,
 	}
 
-	_, err := a.Generate(context.Background(), api.CCRequestBody{}, "key")
+	_, err := a.Generate(context.Background(), api.CCRequestBody{}, "key", true)
 	if err == nil {
 		t.Fatal("expected error, got nil")
 	}
@@ -184,7 +184,7 @@ func TestCCAdapter_Generate_ContextCancellation(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
 	defer cancel()
 
-	_, err := a.Generate(ctx, api.CCRequestBody{}, "key")
+	_, err := a.Generate(ctx, api.CCRequestBody{}, "key", true)
 	if err == nil {
 		t.Fatal("expected error from cancelled context")
 	}
@@ -287,7 +287,7 @@ func TestCCAdapter_VersionHeader_Injected(t *testing.T) {
 		versionProvider: &version.StaticProvider{Version: wantVersion},
 	}
 
-	body, err := a.Generate(context.Background(), api.CCRequestBody{}, "key")
+	body, err := a.Generate(context.Background(), api.CCRequestBody{}, "key", true)
 	if err != nil {
 		t.Fatalf("Generate: %v", err)
 	}

@@ -64,6 +64,9 @@ type OpenAIChatRequest struct {
 	XCommandCodeMemory       string          `json:"x_command_code_memory,omitempty"`
 	XCommandCodeSkills       string          `json:"x_command_code_skills,omitempty"`
 	XCommandCodeTaste        string          `json:"x_command_code_taste,omitempty"`
+	// XCommandCodeTasteLearning overrides the proxy default for the
+	// upstream x-taste-learning header. nil = use proxy default.
+	XCommandCodeTasteLearning *bool          `json:"x_command_code_taste_learning,omitempty"`
 }
 
 type OpenAIResponsesRequest struct {
@@ -87,6 +90,7 @@ type OpenAIResponsesRequest struct {
 	XCommandCodeMemory       string   `json:"x_command_code_memory,omitempty"`
 	XCommandCodeSkills       string   `json:"x_command_code_skills,omitempty"`
 	XCommandCodeTaste        string   `json:"x_command_code_taste,omitempty"`
+	XCommandCodeTasteLearning *bool   `json:"x_command_code_taste_learning,omitempty"`
 }
 
 type OpenAIChoice struct {

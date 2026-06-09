@@ -22,6 +22,7 @@ func main() {
 	listClosed := flag.Bool("list-closed-models", false, "Include closed/premium models (Claude, GPT) in /v1/models")
 	captureDir := flag.String("capture-dir", "", "Directory to save raw upstream NDJSON streams (for debugging/fixture capture)")
 	workingDir := flag.String("working-dir", "", "Working directory/project context to send to CommandCode (default: proxy process working directory)")
+	tasteLearning := flag.Bool("taste-learning", true, "Default value for the upstream x-taste-learning header (mirrors the user's command-code userConfig.tasteLearning). Per-request override via x_command_code_taste_learning wins.")
 	showVersion := flag.Bool("version", false, "Print version and exit")
 	debug := flag.Bool("debug", false, "Enable debug-level logging")
 	flag.Parse()
@@ -48,6 +49,7 @@ func main() {
 	p := proxy.NewProxy(*apiKey, proxy.NewCCAdapter())
 	p.ListClosedModels = *listClosed
 	p.WorkingDir = *workingDir
+	p.TasteLearning = tasteLearning
 
 	if *captureDir != "" {
 		if err := os.MkdirAll(*captureDir, 0o755); err != nil {
