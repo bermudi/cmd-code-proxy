@@ -119,6 +119,13 @@ func BuildCCRequestWithWorkingDir(openAIReq api.OpenAIChatRequest, workingDirOve
 	if openAIReq.XCommandCodeTaste != "" {
 		ccBody.Taste = openAIReq.XCommandCodeTaste
 	}
+	
+	  // PATCH: Force empty array on final CC payload instead of null
+    for i := range ccBody.Params.Messages {
+        if ccBody.Params.Messages[i].Content == nil {
+            ccBody.Params.Messages[i].Content = []api.CCContentPart{}
+        }
+    }
 
 	return ccBody, nil
 }
