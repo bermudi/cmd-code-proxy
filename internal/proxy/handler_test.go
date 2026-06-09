@@ -675,3 +675,33 @@ func TestHandleChatCompletions_TasteLearningDefault(t *testing.T) {
 		t.Errorf("tasteLearning = %v, want true (binary default)", capturedTaste)
 	}
 }
+
+// TestResponsesToChatRequest_PassesTasteLearning — the /v1/responses
+// shim must propagate x_command_code_taste_learning to the chat
+// request, otherwise per-request taste override is silently lost for
+// Responses clients.
+func TestResponsesToChatRequest_PassesTasteLearning(t *testing.T) {
+	fa := false
+	resp := api.OpenAIResponsesRequest{
+		Model: "MiniMaxAI/MiniMax-M3",
+		Input: "hello",
+		XCommandCodeTasteLearning: &fa,
+	}
+	chat := responsesToChatRequest(resp)
+	if chat.XCommandCodeTasteLearning == nil || *chat.XCommandCodeTasteLearning != false {
+		t.Errorf("XCommandCodeTasteLearning = %v, want &false", chat.XCommandCodeTasteLearning)
+	}
+
+	tr := true
+	resp.XCommandCodeTasteLearning = &tr
+	chat = responsesToChatRequest(resp)
+	if chat.XCommandCodeTasteLearning == nil || *chat.XCommandCodeTasteLearning != true {
+		t.Errorf("XCommandCodeTasteLearning = %v, want &true", chat.XCommandCodeTasteLearning)
+	}
+
+	resp.XCommandCodeTasteLearning = nil
+	chat = responsesToChatRequest(resp)
+	if chat.XCommandCodeTasteLearning != nil {
+		t.Errorf("XCommandCodeTasteLearning = %v, want nil", chat.XCommandCodeTasteLearning)
+	}
+}

@@ -279,6 +279,7 @@ func responsesToChatRequest(req api.OpenAIResponsesRequest) api.OpenAIChatReques
 		XCommandCodeMemory:       req.XCommandCodeMemory,
 		XCommandCodeSkills:       req.XCommandCodeSkills,
 		XCommandCodeTaste:        req.XCommandCodeTaste,
+		XCommandCodeTasteLearning: req.XCommandCodeTasteLearning,
 	}
 }
 

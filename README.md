@@ -61,6 +61,7 @@ go run main.go [options]
 | `-api-key` | empty | Optional default CommandCode API key |
 | `-list-closed-models` | `false` | Include closed/premium models, such as Claude and GPT, in `/v1/models` |
 | `-working-dir` | proxy process working directory | Working directory/project context to send to CommandCode |
+| `-taste-learning` | `true` | Default value for the upstream `x-taste-learning` header. Override per-request with `x_command_code_taste_learning` in the request body. |
 | `-capture-dir` | empty | Directory to save raw upstream request and response NDJSON for debugging |
 | `-debug` | `false` | Enable debug-level logging (verbose per-event NDJSON) |
 | `-version` | `false` | Print version and exit |

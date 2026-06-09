@@ -143,3 +143,10 @@ Items I considered and chose *not* to do, with reasons. This section is here so 
 ## How to revise this
 
 When the next phase starts, copy the next phase's items into the active section and update the date. When a phase completes, move its items to a `## Completed` section at the bottom with the commit hash that finished them. When something is rejected, move it to Phase 3 with the reason.
+
+## Closed fidelity gaps
+
+Gaps from MAINTAINING.md § "Proxy vs real binary — remaining fidelity gaps" that have been closed. Each entry links the gap description to the commit that closed it.
+
+- **`x-taste-learning` hardcoded `"true"`** — closed by `e77a37b`. The proxy now resolves the value with explicit precedence: per-request `x_command_code_taste_learning` (set by the pi `cc-cwd` extension, which hardcodes `false` to match the user's local config) > `-taste-learning` CLI flag > `true` binary default. The `Upstream` interface gained a `tasteLearning bool` parameter on `Generate` to carry the resolved value per request. See MAINTAINING.md § Taste learning.
+
