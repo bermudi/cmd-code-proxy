@@ -1,6 +1,6 @@
 # MAINTAINING.md
 
-Mechanism-rich reference for working on this proxy. **Read this when you're about to change the response side, debug a request-fidelity question, or cut a release.** For the project's shape, intent, and goals, see [AGENTS.md](AGENTS.md). For the time-bound plan, see [ROADMAP.md](ROADMAP.md).
+Mechanism-rich reference for working on this proxy. **Read this when you're about to change the client-facing output, debug a request-fidelity question, or cut a release.** For the project's shape, intent, and goals, see [AGENTS.md](AGENTS.md). For the time-bound plan, see [ROADMAP.md](ROADMAP.md).
 
 ## CommandCode gateway protocol
 
@@ -327,7 +327,7 @@ The real binary sends a `threadId` (UUID) at the top level of the request body. 
 
 ## Parity test mechanics
 
-The response side is the hard contract of this proxy. The parity test in `internal/proxy/paritytest/` is the safety net. It feeds the same NDJSON through a vendored copy of the pre-refactor dispatcher and the current code, then diffs the bytes. Streaming is asserted byte-identical; non-streaming is asserted class-equivalent via per-fixture `expected` maps.
+The client-facing output is the hard contract of this proxy. The parity test in `internal/proxy/paritytest/` is the safety net. It feeds the same NDJSON through a vendored copy of the pre-refactor dispatcher and the current code, then diffs the bytes. Streaming is asserted byte-identical; non-streaming is asserted class-equivalent via per-fixture `expected` maps.
 
 ### The harness in one paragraph
 
@@ -371,7 +371,7 @@ If the bait doesn't fail the test, the test is broken. Stop and fix it.
 
 ## Request-side fidelity
 
-What the proxy accepts on the request side. **Until this lands as a comment in `main.go` (see ROADMAP Phase 2.3), this file is the source of truth.**
+What the proxy accepts from clients and translates into upstream requests. **Until this lands as a comment in `main.go` (see ROADMAP Phase 2.3), this file is the source of truth.**
 
 | Field | Status |
 | --- | --- |
@@ -393,7 +393,7 @@ The dropped fields aren't used by the personal-use scenarios this proxy was buil
 
 ## Request-shape parity test
 
-In addition to the response-side parity test, `paritytest/cmdcode_shape_test.go` asserts the proxy's **request** shape matches the real `command-code` binary's shape. Four tests:
+In addition to the client-facing parity test, `paritytest/cmdcode_shape_test.go` asserts the proxy's **request** shape matches the real `command-code` binary's shape. Four tests:
 
 - `TestCommandCodeShape_NoSystemRoleInMessages` — reads the most recent capture from `../cmd-recorder/captures/` and asserts no `system`/`developer` role appears in `params.messages[]`. Skip-not-fail if the recorder dir is absent.
 - `TestProxyRequestShape_DropsSystemMessages` — feeds a pi-shaped OpenAI request (5 messages, 2 system) into `BuildCCRequest`; asserts 3 messages survive and none are system/developer.
@@ -432,7 +432,7 @@ For everyday commits, the bar is lower:
 
 - [ ] `go test ./...` — all green.
 - [ ] `go vet ./...` — clean.
-- [ ] If you changed the response side, the parity test caught the diff and the diff is classified (see Parity test mechanics above).
+- [ ] If you changed the client-facing output, the parity test caught the diff and the diff is classified (see Parity test mechanics above).
 - [ ] AGENTS.md and ROADMAP.md are updated if scope, goals, or the plan changed.
 
 That's it. No tag, no version bump, no rebuild of all platforms.

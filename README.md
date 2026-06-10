@@ -6,7 +6,7 @@ Repository: https://github.com/bermudi/cmd-code-proxy
 
 Version: `v1.0.8`
 
-For project conventions, scope, goals, and the request-side fidelity table, see [AGENTS.md](AGENTS.md) (the table itself lives in [MAINTAINING.md](MAINTAINING.md) for now). For the time-bound development plan, see [ROADMAP.md](ROADMAP.md).
+For project conventions, scope, goals, and the upstream-request fidelity table, see [AGENTS.md](AGENTS.md) (the table itself lives in [MAINTAINING.md](MAINTAINING.md) for now). For the time-bound development plan, see [ROADMAP.md](ROADMAP.md).
 
 ## Features
 
@@ -26,11 +26,11 @@ For project conventions, scope, goals, and the request-side fidelity table, see 
 
 This is a personal-use adapter, not a complete OpenAI-API shape-preserving proxy.
 
-**Supported on the request side:** `model`, `messages` (including system hoisting, content parts, images, tool calls, tool results, thinking blocks), `tools`, `temperature`, `max_tokens`/`max_completion_tokens`, `stream`. Everything a Claude-Code-style client actually exercises.
+**Supported in the upstream request:** `model`, `messages` (including system hoisting, content parts, images, tool calls, tool results, thinking blocks), `tools`, `temperature`, `max_tokens`/`max_completion_tokens`, `stream`. Everything a Claude-Code-style client actually exercises.
 
-**Not supported on the request side:** `tool_choice`, `parallel_tool_calls`, `response_format`, `stop`, `top_p`, `presence_penalty`, `frequency_penalty`. These are accepted by the JSON parser and dropped before reaching CommandCode. If you need one, file an issue.
+**Not supported in the upstream request:** `tool_choice`, `parallel_tool_calls`, `response_format`, `stop`, `top_p`, `presence_penalty`, `frequency_penalty`. These are accepted by the JSON parser and dropped before reaching CommandCode. If you need one, file an issue.
 
-**Response side:** byte-equivalent to this proxy's verified pre-refactor behavior for every event class covered by the parity test (17 fixtures, all event types and combinations). Streaming errors from upstream are logged but not surfaced to the client.
+**Client-facing output:** byte-equivalent to this proxy's verified pre-refactor behavior for every event class covered by the parity test (17 fixtures, all event types and combinations). Streaming errors from upstream are logged but not surfaced to the client.
 
 ## Requirements
 
@@ -241,7 +241,7 @@ Unknown model names are passed through unchanged.
 .
 ├── README.md
 ├── AGENTS.md            # goals, scope, process discipline
-├── MAINTAINING.md        # parity-test mechanics, request-fidelity table, release checklist
+├── MAINTAINING.md        # parity-test mechanics, upstream-request fidelity table, release checklist
 ├── ROADMAP.md            # time-bound development plan
 ├── go.mod
 ├── go.sum
@@ -254,7 +254,7 @@ Unknown model names are passed through unchanged.
     │   └── openai.go
     ├── proxy
     │   ├── adapter.go         # real CommandCode API client
-    │   ├── assembler.go       # response-side dispatcher (stream + non-stream)
+    │   ├── assembler.go       # client-facing dispatcher (stream + non-stream)
     │   ├── assembler_test.go  # per-event-class unit tests
     │   ├── config.go          # config FS population + porcelain parser
     │   ├── convert.go         # OpenAI ↔ CommandCode message/tool format
@@ -280,7 +280,7 @@ Unknown model names are passed through unchanged.
 2. The proxy extracts system messages, maps the model name, and converts messages to CommandCode format.
 3. The proxy sends the request to `https://api.commandcode.ai/alpha/generate`.
 4. CommandCode streaming NDJSON events are converted back to OpenAI-shaped SSE chunks or collected into a single JSON response.
-5. The response side has a parity test (in `internal/proxy/paritytest/`) that pins the wire format byte-for-byte against a vendored copy of the pre-refactor dispatcher, so any future change to streaming or finish-reason semantics must either match the old behavior or be explicitly classified as an intentional improvement.
+5. The client-facing output has a parity test (in `internal/proxy/paritytest/`) that pins the wire format byte-for-byte against a vendored copy of the pre-refactor dispatcher, so any future change to streaming or finish-reason semantics must either match the old behavior or be explicitly classified as an intentional improvement.
 
 Every upstream request is sent with `stream: true`. For non-streaming clients, the proxy buffers the NDJSON stream and assembles the final JSON response.
 

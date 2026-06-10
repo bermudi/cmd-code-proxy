@@ -1,14 +1,14 @@
 # AGENTS.md
 
 ## Project
-Personal-use HTTP proxy that exposes an OpenAI-shaped API and translates to CommandCode's proprietary `/alpha/generate` endpoint. Lets any OpenAI-shaped client use CommandCode as a backend. Built for the maintainer's own use; the priority is making the response side look like the real `command-code` binary output.
+Personal-use HTTP proxy that exposes an OpenAI-shaped API and translates to CommandCode's proprietary `/alpha/generate` endpoint. Lets any OpenAI-shaped client use CommandCode as a backend. Built for the maintainer's own use; the priority is making the client-facing output look like the real `command-code` binary output.
 
 ## Scope — what this proxy is, and what it isn't
-**Is:** an OpenAI-shape adapter for personal use. Response side is a faithful translation; request side supports the OpenAI features actually used in practice (tools, tool calls, images, system messages, thinking/reasoning content parts, plus the basics).
+**Is:** an OpenAI-shape adapter for personal use. The client-facing output is a faithful translation of what CommandCode returns; the upstream request only needs to carry the OpenAI features actually used in practice (tools, tool calls, images, system messages, thinking/reasoning content parts, plus the basics).
 
 **Is not:** a complete OpenAI-API-shape-preserving proxy. The dropped-fields list lives in [MAINTAINING.md](MAINTAINING.md); the deliberate-feature-gaps are in [ROADMAP.md](ROADMAP.md) § Phase 3.
 
-The asymmetry is deliberate: the response side is the hard contract (anything wrong there is a bug a real client will hit); the request side only needs to carry the features actually exercised.
+The asymmetry is deliberate: the client-facing output is the hard contract (anything wrong there is a bug a real client will hit); the upstream request only needs to carry the features actually exercised.
 
 ## Stack
 Go 1.26, stdlib + `google/uuid`. No web framework, no ORM, no DI container — `proxy.go` wires the routes by hand.
@@ -22,7 +22,7 @@ OpenAI client → localhost:55990/v1/chat/completions (OpenAI format)
 
 ### Response pipeline (assembler.go + translator.go)
 
-The response side is a three-stage pipeline:
+The client-facing output is a three-stage pipeline:
 
 1. **EventTranslator** (`translator.go`) — scans upstream NDJSON, yields typed `Event` structs. Normalizes `finish-step`/`finish` deduplication and usage fields.
 2. **ResponseAssembler** (`assembler.go`) — drives the translator loop, owns the `toolIndexRegistry`, dispatches each event to a `sink`.
@@ -72,10 +72,10 @@ Three non-obvious decisions:
 - **`x-taste-learning` should reflect the user's actual `command-code` preference, not be hardcoded to `"true"`.** The real binary reads `userConfig.tasteLearning` (default `true`) and sends `"true"`/`"false"` accordingly. The pi extension (cc-cwd) hardcodes `x_command_code_taste_learning: false` per-request to match the user's local preference; a `-taste-learning` CLI flag sets the proxy-wide default. See MAINTAINING.md § Taste learning for the full wire-format analysis. If the user toggles their command-code taste preference, the extension value needs to be edited (no automatic coupling — by design, the extension doesn't read `~/.commandcode/config.json`).
 - **`x-co-flag` is misnamed.** Despite the constant `INTERNAL_TEAM_FLAG_HEADER`, the value the binary sets is `isOAuthEnforced().toString()`. The proxy's hardcoded `"false"` is correct for an API-key auth deployment.
 - **Tool results whose content starts with `Error:` get `type: "error-text"`.** Stable data contract; do not "fix" this.
-- **The response side exposes `reasoning_content` on both `Message` and `Delta`.** De facto standard among reasoning-model gateways (DeepSeek, Qwen, Anthropic-protocol bridges) and matches the upstream `command-code` binary. Strict OpenAI SDKs ignore it; reasoning-aware clients consume it.
+- **The client-facing output exposes `reasoning_content` on both `Message` and `Delta`.** De facto standard among reasoning-model gateways (DeepSeek, Qwen, Anthropic-protocol bridges) and matches the upstream `command-code` binary. Strict OpenAI SDKs ignore it; reasoning-aware clients consume it.
 
-## Process — how to change the response side
-The response side is the hard contract. The unit tests in `*_test.go` verify the per-event contract; the **parity test is the proof of behavior preservation on the wire format**. If only the unit tests pass, the change is suspect.
+## Process — how to change the client-facing output
+The client-facing output is the hard contract. The unit tests in `*_test.go` verify the per-event contract; the **parity test is the proof of behavior preservation on the wire format**. If only the unit tests pass, the change is suspect.
 
 The rules:
 
@@ -120,11 +120,11 @@ The `COMMANDCODE_API_URL` env var is silently ignored unless `COMMANDCODE_SANDBO
 ## Goals
 What this proxy should always do well:
 
-1. **Response-side fidelity to the verified pre-refactor baseline.** Streaming SSE and non-streaming JSON must be byte-equivalent (or class-equivalent for known fixes) for every event combination the parity test exercises.
+1. **Client-facing fidelity to the verified pre-refactor baseline.** Streaming SSE and non-streaming JSON must be byte-equivalent (or class-equivalent for known fixes) for every event combination the parity test exercises.
 2. **Faithful streaming tool-call protocol translation.** Three upstream tool-call shapes → one OpenAI protocol. No data loss, no splitting one logical call into multiple client-visible calls.
 3. **Faithful finish-reason semantics.** `length` / `content_filter` / `tool_calls` / `stop` from upstream are preserved. The pre-refactor non-streaming path silently downgraded length and content_filter to `stop`; that was a bug, do not reintroduce it.
 4. **Reasoning-content passthrough.** `reasoning_content` on both `Message` and `Delta`.
-5. **Tools, images, and thinking on the request side.** Round-trip cleanly.
+5. **Tools, images, and thinking in the upstream request.** Round-trip cleanly.
 6. **No regression in `/v1/models`, `/health`, `/v1/responses` for the supported subset.**
 
 ## Constraints
@@ -134,5 +134,5 @@ What this proxy should always do well:
 
 ## Pointers
 - Time-bound plan: [ROADMAP.md](ROADMAP.md)
-- Mechanism-rich reference: [MAINTAINING.md](MAINTAINING.md) (parity test mechanics, request-fidelity table, release checklist)
+- Mechanism-rich reference: [MAINTAINING.md](MAINTAINING.md) (parity test mechanics, upstream-request fidelity table, release checklist)
 - User-facing doc: [README.md](README.md)

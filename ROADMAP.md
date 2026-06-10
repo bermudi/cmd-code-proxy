@@ -10,7 +10,7 @@ The next phase of work is about making the existing proxy more trustworthy in pr
 Three things justify this prioritization:
 
 1. **The proxy is in personal use, and the current feature set is sufficient for the workflows it serves.** Adding `tool_choice` or `response_format` support is speculative until a real request hits the proxy that needs it.
-2. **The biggest recent wins were about *noticing* things the existing tests missed.** The `finish_reason: length` → `stop` bug survived for some time because the unit tests verified the per-event contract but never verified the wire format end-to-end. The parity test fixes that. The next job is to extend the same discipline to the request side and to the upstream protocol drift.
+2. **The biggest recent wins were about *noticing* things the existing tests missed.** The `finish_reason: length` → `stop` bug survived for some time because the unit tests verified the per-event contract but never verified the wire format end-to-end. The parity test fixes that. The next job is to extend the same discipline to the upstream request and to the upstream protocol drift.
 3. **The proxy is observability-poor.** When something breaks, the only signal is `log.Printf` lines. That's fine for a personal tool that the maintainer runs interactively; it gets worse fast as soon as anything else changes (an upstream protocol change, a model switch, a different client). A request ID flowing end-to-end is the cheapest single improvement that unlocks every future debugging session.
 
 ## Phase 1 — reliability (next 1–2 sessions)
@@ -70,7 +70,7 @@ The goal of this phase is to make the proxy pleasant to *operate* (deploy, debug
 ### 2.3 Make the personal-use boundary visible
 
 - **What:** Add a comment in `main.go` (or a `LIMITATIONS.md` at the repo root) listing the dropped OpenAI request fields, the partial Responses shim, the hand-curated model list, and stating explicitly: "this proxy is for personal use by the maintainer; the following are intentionally not implemented."
-- **Why:** Today, the gap between "what's implemented" and "what's documented as not implemented" is one document (AGENTS.md's request-side fidelity table). A reader skimming `main.go` has no signal that this is a personal-use tool with deliberate scope. Making the boundary a comment next to the actual code means anyone (including future bermudi) who lands in the file is told what the project is *not* trying to be.
+- **Why:** Today, the gap between "what's implemented" and "what's documented as not implemented" is one document (AGENTS.md's upstream-request fidelity table). A reader skimming `main.go` has no signal that this is a personal-use tool with deliberate scope. Making the boundary a comment next to the actual code means anyone (including future bermudi) who lands in the file is told what the project is *not* trying to be.
 - **Effort:** 30 minutes.
 - **Success criteria:** A comment in `main.go` (or a sibling file) lists the scope decisions. AGENTS.md links to it from the Scope section.
 - **Depends on:** nothing.
@@ -104,7 +104,7 @@ The goal of this phase is to make the proxy pleasant to *operate* (deploy, debug
 ### 2.7 Request-shape parity test ✅
 
 - **What:** Assert the proxy's request shape matches the real `command-code` binary's shape on key properties: no system/developer roles in messages, no AGENTS.md leakage, `config.workingDir` set.
-- **Why:** The system-message bug (`normalizeRole` rewriting `system → user`) would have been caught immediately by a request-shape parity test. The response-side parity test covers the wire format out; this covers the wire format in.
+- **Why:** The system-message bug (`normalizeRole` rewriting `system → user`) would have been caught immediately by a request-shape parity test. The client-facing parity test covers the wire format out; this covers the wire format in.
 - **Effort:** done in commit `66e64f0`.
 - **Success criteria:** `paritytest/cmdcode_shape_test.go` — 4 tests, verified to catch the regression by bait-and-revert.
 - **Depends on:** `cmd-recorder` captures as ground truth.
@@ -121,7 +121,7 @@ The goal of this phase is to make the proxy pleasant to *operate* (deploy, debug
 - **What:** `tool_choice`, `parallel_tool_calls`, `response_format`, `stop`, `top_p`. Implement CommandCode-side equivalents for each as the need arises.
 - **Why:** These are real gaps. They are not gaps that matter for current usage. Doing them speculatively produces code that isn't tested against a real use case, and code paths that aren't used are often subtly wrong.
 - **Effort:** small per field, ~1–2 hours each.
-- **Success criteria:** A request comes in that needs a specific field, the implementation lands with a parity fixture showing it round-trips, the AGENTS.md request-side fidelity table updates to ✓.
+- **Success criteria:** A request comes in that needs a specific field, the implementation lands with a parity fixture showing it round-trips, the AGENTS.md upstream-request fidelity table updates to ✓.
 - **Depends on:** the need. Until then, this is a placeholder.
 
 ## Phase 3 — explicitly deferred
@@ -131,7 +131,7 @@ Items I considered and chose *not* to do, with reasons. This section is here so 
 - **Dynamic `/v1/models` from upstream.** The hand-curated list (`fallbackModels` in `proxy.go`) is fine for personal use. The cost of dynamic fetching is a runtime dependency on upstream at startup, plus a cache-invalidation problem. The user knows what models to add when CommandCode ships them. **Don't do this unless multiple users / a containerized deployment materializes.**
 - **Full OpenAI Responses coverage.** The shim is partial by design; the chat completions endpoint is the primary surface. The fields I'd need to support (`truncation`, `metadata`, `previous_response_id`, `store`, `user`, the `reasoning` parameter) are non-trivial and tied to the Responses-specific state model. **Don't do this without a real consumer.**
 - **Public-package API boundary.** The proxy's internals are exposed to `paritytest` for convenience (the vendored old code calls into the same package). If the proxy were ever imported as a library, this would need cleanup. The work is speculative until that happens. **Don't do this.**
-- **Request-body fidelity parity test.** The current request-side tests are per-feature unit tests in `convert_test.go`. A byte-equivalence parity test would require vendoring an old request-builder, which doesn't exist as a separate function today. **Update (2026-06-08): the request-shape parity test landed in `paritytest/cmdcode_shape_test.go` (commit `66e64f0`).** It asserts structural properties (no system roles, no AGENTS.md leakage, `config.workingDir` set) against `cmd-recorder` captures. A full byte-equivalence test is still overkill unless Phase 2.4 happens and the request side starts evolving. The pattern from `paritytest/` is reusable.
+- **Request-body fidelity parity test.** The current upstream-request tests are per-feature unit tests in `convert_test.go`. A byte-equivalence parity test would require vendoring an old request-builder, which doesn't exist as a separate function today. **Update (2026-06-08): the request-shape parity test landed in `paritytest/cmdcode_shape_test.go` (commit `66e64f0`).** It asserts structural properties (no system roles, no AGENTS.md leakage, `config.workingDir` set) against `cmd-recorder` captures. A full byte-equivalence test is still overkill unless Phase 2.4 happens and the upstream request starts evolving. The pattern from `paritytest/` is reusable.
 - **All-models version table at `/v1/models`.** There's no actual consumer for it inside the proxy. The CLI's `model.go` already maps short aliases; that's what callers use. **Don't do this.**
 
 ## What this roadmap is not
