@@ -134,7 +134,7 @@ These were the three root causes of the MiniMax-M3 distraction and are **confirm
 | `permissionMode` sent (matches `callServerAPI`) | ✓ correct | — |
 | `x-cli-environment`, `x-project-slug`, `x-co-flag` headers | ✓ sent | values match what the binary sends for API-key auth |
 | `x-taste-learning: <resolved value>` | ✓ resolved | `XCommandCodeTasteLearning` (per-request) > `-taste-learning` flag > `true` default. See § Taste learning. |
-| `x-session-id` | ✗ **not sent** | binary sends the session UUID as a header; proxy uses `threadId` in body only |
+| `x-session-id` | ✓ **sent** | pi extension sends `sess_`+16hex per session; proxy generates fallback if absent |
 
 ### Reverse-engineered binary behavior (`dist/index.mjs`, v0.33.1)
 
@@ -260,7 +260,7 @@ The real binary's `callServerAPI()` (line 5255, the path we mimic) sets:
 - `x-project-slug`: project dir name (slugified via `getCurrentProjectDirName()`)
 - `x-taste-learning`: `isTasteLearningEnabled().toString()` — `"true"` if user has taste learning enabled, `"false"` if disabled. **See § Taste learning for the full story.**
 - `x-co-flag` (misnamed — internally `INTERNAL_TEAM_FLAG_HEADER`): `isOAuthEnforced().toString()`. Despite the name, this is *not* a team flag — it's the OAuth-enforcement signal. For a proxy running with an API key, the value is `"false"`.
-- `x-session-id`: the session's UUID. The proxy doesn't currently send this.
+- `x-session-id`: the session's ID in `sess_` + 16 hex chars format. The pi extension generates one per pi session and sends it as `x_command_code_session_id`; the proxy generates a per-request fallback if absent.
 - `x-oss-primary-provider`: OSS primary provider (when `OSS_PRIMARY_PROVIDER` env var is set)
 - `x-oauth-token`: OAuth bearer token (only when using external provider)
 - `x-oauth-provider`: OAuth provider name (only when using external provider)
@@ -275,9 +275,9 @@ The `callApi()` path (-p mode) is the same set minus `x-session-id` (each `-p` i
 - `x-command-code-version`: from NPM version provider ✓
 - `x-cli-environment`: hardcoded `"production"` ✓
 - `x-project-slug`: slugified from workingDir ✓
-- `x-taste-learning`: hardcoded `"true"` ✗ — should reflect the user's actual preference. See § Taste learning.
+- `x-taste-learning`: resolved via 3-tier precedence (per-request > flag > `true` default). See § Taste learning. ✓
 - `x-co-flag`: hardcoded `"false"` ✓ — correct for API-key auth.
-- `x-session-id`: not sent. The proxy generates `threadId` for the body but doesn't propagate a separate session-id header.
+- `x-session-id`: pi extension sends `sess_`+16hex per session; proxy generates per-request fallback if absent. ✓
 - `Accept: text/event-stream` ✓ (proxy-specific)
 - `X-Request-Id`: proxy request ID (when available) ✓ (proxy-specific)
 

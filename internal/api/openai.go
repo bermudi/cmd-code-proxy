@@ -67,6 +67,10 @@ type OpenAIChatRequest struct {
 	// XCommandCodeTasteLearning overrides the proxy default for the
 	// upstream x-taste-learning header. nil = use proxy default.
 	XCommandCodeTasteLearning *bool          `json:"x_command_code_taste_learning,omitempty"`
+	// XCommandCodeSessionId is sent by the pi extension as a stable session
+	// identifier for the upstream x-session-id header. Empty = proxy generates
+	// a per-request fallback.
+	XCommandCodeSessionId   string           `json:"x_command_code_session_id,omitempty"`
 }
 
 type OpenAIResponsesRequest struct {
@@ -91,6 +95,7 @@ type OpenAIResponsesRequest struct {
 	XCommandCodeSkills       string   `json:"x_command_code_skills,omitempty"`
 	XCommandCodeTaste        string   `json:"x_command_code_taste,omitempty"`
 	XCommandCodeTasteLearning *bool   `json:"x_command_code_taste_learning,omitempty"`
+	XCommandCodeSessionId   string  `json:"x_command_code_session_id,omitempty"`
 }
 
 type OpenAIChoice struct {

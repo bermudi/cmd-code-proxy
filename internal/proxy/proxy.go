@@ -3,6 +3,7 @@ package proxy
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/bermudi/cmd-code-proxy/internal/api"
 	"github.com/google/uuid"
@@ -129,4 +130,14 @@ func BuildCCRequestWithWorkingDir(openAIReq api.OpenAIChatRequest, workingDirOve
 func newThreadID() *string {
 	s := uuid.New().String()
 	return &s
+}
+
+// generateSessionID creates a session identifier in the same format as the
+// real command-code binary's generateSessionId(): "sess_" + UUID-without-dashes
+// truncated to 16 hex chars. Used as a fallback when the pi extension does
+// not send x_command_code_session_id.
+func generateSessionID() string {
+	id := uuid.New().String()
+	id = strings.ReplaceAll(id, "-", "")
+	return "sess_" + id[:16]
 }

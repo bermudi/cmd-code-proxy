@@ -17,9 +17,11 @@ type Upstream interface {
 	// A non-nil *UpstreamError means the server responded with a non-200 status.
 	// tasteLearning is the resolved value for the upstream x-taste-learning
 	// header (the user's preference, surfaced by isTasteLearningEnabled() in
-	// the real binary). The real adapter sets it on the request; fakes ignore
-	// it.
-	Generate(ctx context.Context, ccBody api.CCRequestBody, apiKey string, tasteLearning bool) (io.ReadCloser, error)
+	// the real binary).
+	// sessionID is the resolved value for the upstream x-session-id header
+	// (the pi extension sends a stable ID per session; the proxy generates
+	// a fallback if absent).
+	Generate(ctx context.Context, ccBody api.CCRequestBody, apiKey string, tasteLearning bool, sessionID string) (io.ReadCloser, error)
 
 	// FetchModels returns the available model list from upstream.
 	// Returns unfiltered results; the caller applies filtering.

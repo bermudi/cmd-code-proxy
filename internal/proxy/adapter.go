@@ -50,7 +50,7 @@ func NewCCAdapter() *ccAdapter {
 }
 
 // Generate implements Upstream.
-func (a *ccAdapter) Generate(ctx context.Context, ccBody api.CCRequestBody, apiKey string, tasteLearning bool) (io.ReadCloser, error) {
+func (a *ccAdapter) Generate(ctx context.Context, ccBody api.CCRequestBody, apiKey string, tasteLearning bool, sessionID string) (io.ReadCloser, error) {
 	var lastErr error
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		if attempt > 0 {
@@ -66,7 +66,7 @@ func (a *ccAdapter) Generate(ctx context.Context, ccBody api.CCRequestBody, apiK
 			}
 		}
 
-		ccReq, err := a.createUpstreamRequest(ctx, ccBody, apiKey, tasteLearning)
+		ccReq, err := a.createUpstreamRequest(ctx, ccBody, apiKey, tasteLearning, sessionID)
 		if err != nil {
 			return nil, err
 		}
@@ -165,7 +165,7 @@ func (a *ccAdapter) FetchModels(ctx context.Context, apiKey string) ([]api.OpenA
 	return models, nil
 }
 
-func (a *ccAdapter) createUpstreamRequest(ctx context.Context, ccBody api.CCRequestBody, apiKey string, tasteLearning bool) (*http.Request, error) {
+func (a *ccAdapter) createUpstreamRequest(ctx context.Context, ccBody api.CCRequestBody, apiKey string, tasteLearning bool, sessionID string) (*http.Request, error) {
 	reqJSON, err := json.Marshal(ccBody)
 	if err != nil {
 		return nil, fmt.Errorf("failed to build request: %w", err)
@@ -175,6 +175,7 @@ func (a *ccAdapter) createUpstreamRequest(ctx context.Context, ccBody api.CCRequ
 		"request_id", RequestIDFromContext(ctx),
 		"body", truncateLog(string(reqJSON)),
 		"taste_learning", tasteLearning,
+		"session_id", sessionID,
 	)
 
 	ccReq, err := http.NewRequestWithContext(ctx, http.MethodPost,
@@ -194,6 +195,7 @@ func (a *ccAdapter) createUpstreamRequest(ctx context.Context, ccBody api.CCRequ
 	// x_command_code_taste_learning; the CLI flag sets a proxy-wide default.
 	ccReq.Header.Set("x-taste-learning", strconv.FormatBool(tasteLearning))
 	ccReq.Header.Set("x-co-flag", "false")
+	ccReq.Header.Set("x-session-id", sessionID)
 	ccReq.Header.Set("Accept", "text/event-stream")
 
 	// Forward request ID so upstream can correlate if needed.

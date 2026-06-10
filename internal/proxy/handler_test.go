@@ -17,13 +17,13 @@ import (
 
 // fakeUpstream implements Upstream for testing.
 type fakeUpstream struct {
-	generateFn func(ctx context.Context, ccBody api.CCRequestBody, apiKey string, tasteLearning bool) (io.ReadCloser, error)
+	generateFn func(ctx context.Context, ccBody api.CCRequestBody, apiKey string, tasteLearning bool, sessionID string) (io.ReadCloser, error)
 	modelsFn   func(ctx context.Context, apiKey string) ([]api.OpenAIModel, error)
 }
 
-func (f *fakeUpstream) Generate(ctx context.Context, ccBody api.CCRequestBody, apiKey string, tasteLearning bool) (io.ReadCloser, error) {
+func (f *fakeUpstream) Generate(ctx context.Context, ccBody api.CCRequestBody, apiKey string, tasteLearning bool, sessionID string) (io.ReadCloser, error) {
 	if f.generateFn != nil {
-		return f.generateFn(ctx, ccBody, apiKey, tasteLearning)
+		return f.generateFn(ctx, ccBody, apiKey, tasteLearning, sessionID)
 	}
 	return nil, fmt.Errorf("fakeUpstream: Generate not configured")
 }
@@ -47,7 +47,7 @@ func TestHandleChatCompletions_StreamWithFakeUpstream(t *testing.T) {
 	}
 
 	p := NewProxy("test-key", &fakeUpstream{
-		generateFn: func(_ context.Context, _ api.CCRequestBody, apiKey string, _ bool) (io.ReadCloser, error) {
+		generateFn: func(_ context.Context, _ api.CCRequestBody, apiKey string, _ bool, _ string) (io.ReadCloser, error) {
 			if apiKey != "test-key" {
 				t.Errorf("apiKey = %q, want %q", apiKey, "test-key")
 			}
@@ -96,7 +96,7 @@ func TestHandleChatCompletions_NonStreamWithFakeUpstream(t *testing.T) {
 	}
 
 	p := NewProxy("test-key", &fakeUpstream{
-		generateFn: func(_ context.Context, _ api.CCRequestBody, _ string, _ bool) (io.ReadCloser, error) {
+		generateFn: func(_ context.Context, _ api.CCRequestBody, _ string, _ bool, _ string) (io.ReadCloser, error) {
 			return cannedNDJSON(ndjson), nil
 		},
 	})
@@ -127,7 +127,7 @@ func TestHandleChatCompletions_NonStreamWithFakeUpstream(t *testing.T) {
 
 func TestHandleChatCompletions_UpstreamError4xx(t *testing.T) {
 	p := NewProxy("test-key", &fakeUpstream{
-		generateFn: func(_ context.Context, _ api.CCRequestBody, _ string, _ bool) (io.ReadCloser, error) {
+		generateFn: func(_ context.Context, _ api.CCRequestBody, _ string, _ bool, _ string) (io.ReadCloser, error) {
 			return nil, &UpstreamError{StatusCode: 400, Body: "bad request from upstream"}
 		},
 	})
@@ -146,7 +146,7 @@ func TestHandleChatCompletions_UpstreamError4xx(t *testing.T) {
 
 func TestHandleChatCompletions_UpstreamError5xx(t *testing.T) {
 	p := NewProxy("test-key", &fakeUpstream{
-		generateFn: func(_ context.Context, _ api.CCRequestBody, _ string, _ bool) (io.ReadCloser, error) {
+		generateFn: func(_ context.Context, _ api.CCRequestBody, _ string, _ bool, _ string) (io.ReadCloser, error) {
 			return nil, &UpstreamError{StatusCode: 500, Body: "internal error"}
 		},
 	})
@@ -182,7 +182,7 @@ func TestHandleChatCompletions_ClientAPIKeyOverridesDefault(t *testing.T) {
 
 	var capturedKey string
 	p := NewProxy("default-key", &fakeUpstream{
-		generateFn: func(_ context.Context, _ api.CCRequestBody, apiKey string, _ bool) (io.ReadCloser, error) {
+		generateFn: func(_ context.Context, _ api.CCRequestBody, apiKey string, _ bool, _ string) (io.ReadCloser, error) {
 			capturedKey = apiKey
 			return cannedNDJSON(ndjson), nil
 		},
@@ -206,7 +206,7 @@ func TestHandleChatCompletions_UsesProxyWorkingDirOverride(t *testing.T) {
 
 	var capturedBody api.CCRequestBody
 	p := NewProxy("test-key", &fakeUpstream{
-		generateFn: func(_ context.Context, body api.CCRequestBody, _ string, _ bool) (io.ReadCloser, error) {
+		generateFn: func(_ context.Context, body api.CCRequestBody, _ string, _ bool, _ string) (io.ReadCloser, error) {
 			capturedBody = body
 			return cannedNDJSON(ndjson), nil
 		},
@@ -431,7 +431,7 @@ func TestHandleChatCompletions_ToolCallStreaming(t *testing.T) {
 	}
 
 	p := NewProxy("key", &fakeUpstream{
-		generateFn: func(_ context.Context, _ api.CCRequestBody, _ string, _ bool) (io.ReadCloser, error) {
+		generateFn: func(_ context.Context, _ api.CCRequestBody, _ string, _ bool, _ string) (io.ReadCloser, error) {
 			return cannedNDJSON(ndjson), nil
 		},
 	})
@@ -503,7 +503,7 @@ func TestHandleChatCompletions_CaptureDir(t *testing.T) {
 	captureDir := t.TempDir()
 
 	p := NewProxy("key", &fakeUpstream{
-		generateFn: func(_ context.Context, _ api.CCRequestBody, _ string, _ bool) (io.ReadCloser, error) {
+		generateFn: func(_ context.Context, _ api.CCRequestBody, _ string, _ bool, _ string) (io.ReadCloser, error) {
 			return cannedNDJSON(ndjson), nil
 		},
 	})
@@ -569,7 +569,7 @@ func TestHandleChatCompletions_CaptureDir(t *testing.T) {
 
 func TestHandleChatCompletions_TransportError(t *testing.T) {
 	p := NewProxy("key", &fakeUpstream{
-		generateFn: func(_ context.Context, _ api.CCRequestBody, _ string, _ bool) (io.ReadCloser, error) {
+		generateFn: func(_ context.Context, _ api.CCRequestBody, _ string, _ bool, _ string) (io.ReadCloser, error) {
 			return nil, io.ErrUnexpectedEOF
 		},
 	})
@@ -596,7 +596,7 @@ func TestHandleChatCompletions_TasteLearningFromRequest(t *testing.T) {
 
 	var capturedTaste bool
 	p := NewProxy("test-key", &fakeUpstream{
-		generateFn: func(_ context.Context, _ api.CCRequestBody, _ string, tasteLearning bool) (io.ReadCloser, error) {
+		generateFn: func(_ context.Context, _ api.CCRequestBody, _ string, tasteLearning bool, _ string) (io.ReadCloser, error) {
 			capturedTaste = tasteLearning
 			return cannedNDJSON(ndjson), nil
 		},
@@ -627,7 +627,7 @@ func TestHandleChatCompletions_TasteLearningFromProxy(t *testing.T) {
 
 	var capturedTaste bool
 	p := NewProxy("test-key", &fakeUpstream{
-		generateFn: func(_ context.Context, _ api.CCRequestBody, _ string, tasteLearning bool) (io.ReadCloser, error) {
+		generateFn: func(_ context.Context, _ api.CCRequestBody, _ string, tasteLearning bool, _ string) (io.ReadCloser, error) {
 			capturedTaste = tasteLearning
 			return cannedNDJSON(ndjson), nil
 		},
@@ -658,7 +658,7 @@ func TestHandleChatCompletions_TasteLearningDefault(t *testing.T) {
 
 	var capturedTaste bool
 	p := NewProxy("test-key", &fakeUpstream{
-		generateFn: func(_ context.Context, _ api.CCRequestBody, _ string, tasteLearning bool) (io.ReadCloser, error) {
+		generateFn: func(_ context.Context, _ api.CCRequestBody, _ string, tasteLearning bool, _ string) (io.ReadCloser, error) {
 			capturedTaste = tasteLearning
 			return cannedNDJSON(ndjson), nil
 		},
@@ -703,5 +703,86 @@ func TestResponsesToChatRequest_PassesTasteLearning(t *testing.T) {
 	chat = responsesToChatRequest(resp)
 	if chat.XCommandCodeTasteLearning != nil {
 		t.Errorf("XCommandCodeTasteLearning = %v, want nil", chat.XCommandCodeTasteLearning)
+	}
+}
+
+// TestResponsesToChatRequest_PassesSessionId — the /v1/responses shim
+// must propagate x_command_code_session_id, otherwise Responses clients
+// silently lose the session header.
+func TestResponsesToChatRequest_PassesSessionId(t *testing.T) {
+	resp := api.OpenAIResponsesRequest{
+		Model: "MiniMaxAI/MiniMax-M3",
+		Input: "hello",
+		XCommandCodeSessionId: "sess_abc123def45678",
+	}
+	chat := responsesToChatRequest(resp)
+	if chat.XCommandCodeSessionId != "sess_abc123def45678" {
+		t.Errorf("XCommandCodeSessionId = %q, want %q", chat.XCommandCodeSessionId, "sess_abc123def45678")
+	}
+
+	// Empty string should propagate as empty (handler will generate fallback).
+	resp.XCommandCodeSessionId = ""
+	chat = responsesToChatRequest(resp)
+	if chat.XCommandCodeSessionId != "" {
+		t.Errorf("XCommandCodeSessionId = %q, want empty", chat.XCommandCodeSessionId)
+	}
+}
+
+// TestHandleChatCompletions_SessionIdFromExtension — when the pi extension
+// sends x_command_code_session_id, that value reaches upstream.
+func TestHandleChatCompletions_SessionIdFromExtension(t *testing.T) {
+	ndjson := []string{
+		`{"type":"text-delta","text":"ok"}`,
+		`{"type":"finish","finishReason":"stop"}`,
+	}
+
+	var capturedSessionID string
+	p := NewProxy("test-key", &fakeUpstream{
+		generateFn: func(_ context.Context, _ api.CCRequestBody, _ string, _ bool, sessionID string) (io.ReadCloser, error) {
+			capturedSessionID = sessionID
+			return cannedNDJSON(ndjson), nil
+		},
+	})
+
+	body := `{"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":true,"x_command_code_session_id":"sess_ext0123456789ab"}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	p.HandleChatCompletions(rec, req)
+
+	if capturedSessionID != "sess_ext0123456789ab" {
+		t.Errorf("sessionID = %q, want %q", capturedSessionID, "sess_ext0123456789ab")
+	}
+}
+
+// TestHandleChatCompletions_SessionIdFallback — when no extension sends a
+// session ID, the proxy generates one in the correct format.
+func TestHandleChatCompletions_SessionIdFallback(t *testing.T) {
+	ndjson := []string{
+		`{"type":"text-delta","text":"ok"}`,
+		`{"type":"finish","finishReason":"stop"}`,
+	}
+
+	var capturedSessionID string
+	p := NewProxy("test-key", &fakeUpstream{
+		generateFn: func(_ context.Context, _ api.CCRequestBody, _ string, _ bool, sessionID string) (io.ReadCloser, error) {
+			capturedSessionID = sessionID
+			return cannedNDJSON(ndjson), nil
+		},
+	})
+
+	body := `{"model":"test-model","messages":[{"role":"user","content":"hi"}],"stream":true}`
+	req := httptest.NewRequest("POST", "/v1/chat/completions", strings.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	rec := httptest.NewRecorder()
+
+	p.HandleChatCompletions(rec, req)
+
+	if !strings.HasPrefix(capturedSessionID, "sess_") {
+		t.Errorf("sessionID = %q, want 'sess_' prefix", capturedSessionID)
+	}
+	if len(capturedSessionID) != 21 {
+		t.Errorf("sessionID length = %d, want 21 (got %q)", len(capturedSessionID), capturedSessionID)
 	}
 }

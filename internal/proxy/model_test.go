@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"io"
 	"net/http"
+	"strings"
 	"testing"
 	"time"
 
@@ -224,7 +225,7 @@ func TestCreateUpstreamRequest_SetsCLIHeaders(t *testing.T) {
 	}
 
 	a := &ccAdapter{baseURL: "https://example.test", versionProvider: stubProvider}
-	req, err := a.createUpstreamRequest(context.Background(), body, "test-key", true)
+	req, err := a.createUpstreamRequest(context.Background(), body, "test-key", true, "sess_test0123456789")
 	if err != nil {
 		t.Fatalf("CreateUpstreamRequest() error = %v", err)
 	}
@@ -241,6 +242,9 @@ func TestCreateUpstreamRequest_SetsCLIHeaders(t *testing.T) {
 	}
 	if req.Header.Get("x-co-flag") != "false" {
 		t.Errorf("x-co-flag = %q, want false", req.Header.Get("x-co-flag"))
+	}
+	if req.Header.Get("x-session-id") != "sess_test0123456789" {
+		t.Errorf("x-session-id = %q, want %q", req.Header.Get("x-session-id"), "sess_test0123456789")
 	}
 
 	reqBody, err := io.ReadAll(req.Body)
@@ -272,7 +276,7 @@ func TestCreateUpstreamRequest_TasteFalse(t *testing.T) {
 	}
 
 	a := &ccAdapter{baseURL: "https://example.test", versionProvider: stubProvider}
-	req, err := a.createUpstreamRequest(context.Background(), body, "test-key", false)
+	req, err := a.createUpstreamRequest(context.Background(), body, "test-key", false, "sess_test0123456789")
 	if err != nil {
 		t.Fatalf("CreateUpstreamRequest() error = %v", err)
 	}
@@ -307,5 +311,30 @@ func TestResolveTasteLearning(t *testing.T) {
 				t.Errorf("got %v, want %v", got, tc.want)
 			}
 		})
+	}
+}
+
+func TestGenerateSessionID(t *testing.T) {
+	id := generateSessionID()
+
+	if !strings.HasPrefix(id, "sess_") {
+		t.Errorf("session ID = %q, want prefix %q", id, "sess_")
+	}
+	// "sess_" (5) + 16 hex chars = 21 total
+	if len(id) != 21 {
+		t.Errorf("session ID length = %d, want 21 (got %q)", len(id), id)
+	}
+	hexPart := id[5:]
+	for _, r := range hexPart {
+		if !((r >= '0' && r <= '9') || (r >= 'a' && r <= 'f')) {
+			t.Errorf("session ID hex part contains non-hex char %q in %q", r, id)
+			break
+		}
+	}
+
+	// Two calls should produce different IDs.
+	id2 := generateSessionID()
+	if id == id2 {
+		t.Errorf("two GenerateSessionID calls produced the same ID: %q", id)
 	}
 }

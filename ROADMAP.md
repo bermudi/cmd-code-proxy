@@ -150,3 +150,5 @@ Gaps from MAINTAINING.md § "Proxy vs real binary — remaining fidelity gaps" t
 
 - **`x-taste-learning` hardcoded `"true"`** — closed by `e77a37b`. The proxy now resolves the value with explicit precedence: per-request `x_command_code_taste_learning` (set by the pi `cc-cwd` extension, which hardcodes `false` to match the user's local config) > `-taste-learning` CLI flag > `true` binary default. The `Upstream` interface gained a `tasteLearning bool` parameter on `Generate` to carry the resolved value per request. See MAINTAINING.md § Taste learning.
 
+- **`x-session-id` not sent** — closed. The pi extension generates a session ID (`sess_` + 16 hex chars) per pi process and sends it as `x_command_code_session_id` on every request. The proxy generates a per-request fallback if absent. The `Upstream` interface gained a `sessionID string` parameter on `Generate`.
+

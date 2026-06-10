@@ -115,6 +115,20 @@ func (p *Proxy) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	// See MAINTAINING.md § Taste learning for why the proxy doesn't just hardcode "true".
 	tasteLearning := ResolveTasteLearning(openAIReq.XCommandCodeTasteLearning, p.TasteLearning)
 
+	// Resolve session ID: per-request field (from pi extension) > generate per-request fallback.
+	// The extension sends a stable ID per pi session, matching the real binary's
+	// "one session per invocation, reused across turns" behavior.
+	sessionID := openAIReq.XCommandCodeSessionId
+	if sessionID == "" {
+		// Fallback: generate a per-request session ID. This only fires when
+		// the pi extension is not present (e.g. direct curl). The extension
+		// sends a stable ID per pi session, which matches the real binary's
+		// "one session per invocation" model. Per-request generation here
+		// means non-extension clients get a fresh session every request —
+		// acceptable for a fallback path.
+		sessionID = generateSessionID()
+	}
+
 	// Build CommandCode request
 	ccBody, err := BuildCCRequestWithWorkingDir(openAIReq, workingDir)
 	if err != nil {
@@ -158,7 +172,7 @@ func (p *Proxy) HandleChatCompletions(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Call upstream
-	respBody, err := p.upstream.Generate(ctx, ccBody, apiKey, tasteLearning)
+	respBody, err := p.upstream.Generate(ctx, ccBody, apiKey, tasteLearning, sessionID)
 	if err != nil {
 		var ue *UpstreamError
 		if errors.As(err, &ue) {
@@ -280,6 +294,7 @@ func responsesToChatRequest(req api.OpenAIResponsesRequest) api.OpenAIChatReques
 		XCommandCodeSkills:       req.XCommandCodeSkills,
 		XCommandCodeTaste:        req.XCommandCodeTaste,
 		XCommandCodeTasteLearning: req.XCommandCodeTasteLearning,
+		XCommandCodeSessionId:   req.XCommandCodeSessionId,
 	}
 }
 
